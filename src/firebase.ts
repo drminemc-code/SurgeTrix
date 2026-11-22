@@ -132,7 +132,7 @@ export async function ensureUserProfile(
       firebaseUser.email?.split('@')[0] ||
       'SurgePlayer'
   );
-  const safeTheme: ThemeStyleId = isValidThemeId(activeThemeId) ? activeThemeId : 'cyber';
+  const safeTheme: ThemeStyleId = isValidThemeId(activeThemeId) ? activeThemeId : 'obsidian';
   const cleanEmail = (firebaseUser.email || 'user@surgetrix.net').trim().slice(0, 160);
 
   const batch = writeBatch(db);
@@ -251,5 +251,16 @@ export async function deleteCustomDomainFromFirestore(handle: string): Promise<v
     await deleteDoc(doc(db, 'domains', handle));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, domainPath);
+  }
+}
+
+export async function getFirebaseAuthHeaders(): Promise<Record<string, string>> {
+  const current = auth.currentUser;
+  if (!current) return {};
+  try {
+    const token = await current.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
   }
 }

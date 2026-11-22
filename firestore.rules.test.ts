@@ -157,7 +157,16 @@ test('userValidation helpers enforce synchronized blueprint bounds', () => {
 test('firestore.rules secures /domains/{handle} against spoofing and query scraping', () => {
   const rulesText = fs.readFileSync('firestore.rules', 'utf8');
   assert.match(rulesText, /match \/domains\/\{handle\}/);
-  assert.match(rulesText, /allow list: if isSignedIn\(\) && resource\.data\.ownerUid == request\.auth\.uid;/);
+  assert.match(rulesText, /allow list: if isSignedIn\(\) && \(resource\.data\.ownerUid == request\.auth\.uid \|\| isVerifiedPlatformOwner\(\)\);/);
   assert.match(rulesText, /isValidCustomDomain\(incoming\(\), handle\)/);
   assert.match(rulesText, /incoming\(\)\.ownerUid == existing\(\)\.ownerUid/);
+});
+
+test('firestore.rules restricts /plugins to verified drminemc@gmail.com and secures reviews', () => {
+  const rulesText = fs.readFileSync('firestore.rules', 'utf8');
+  assert.match(rulesText, /request\.auth\.token\.email == 'drminemc@gmail\.com'/);
+  assert.match(rulesText, /match \/plugins\/\{pluginId\}/);
+  assert.match(rulesText, /allow create: if isValidId\(pluginId\)\s+&& isVerifiedPlatformOwner\(\)/);
+  assert.match(rulesText, /match \/reviews\/\{reviewId\}/);
+  assert.match(rulesText, /exists\(\/databases\/\$\(database\)\/documents\/plugins\/\$\(pluginId\)\)/);
 });

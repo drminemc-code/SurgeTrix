@@ -27,6 +27,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isVerifiedPlatformOwner() {
+      return isVerifiedUser() && request.auth.token.email == 'drminemc@gmail.com';
+    }
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -153,7 +157,7 @@ service cloud.firestore {
 
     match /domains/{handle} {
       allow get: if isValidDomainHandle(handle);
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && (resource.data.ownerUid == request.auth.uid || isVerifiedPlatformOwner());
 
       allow create: if isValidDomainHandle(handle)
         && isVerifiedUser()
@@ -166,7 +170,7 @@ service cloud.firestore {
 
       allow update: if isValidDomainHandle(handle)
         && isVerifiedUser()
-        && existing().ownerUid == request.auth.uid
+        && (existing().ownerUid == request.auth.uid || isVerifiedPlatformOwner())
         && isValidCustomDomain(incoming(), handle)
         && incoming().ownerUid == existing().ownerUid
         && incoming().handle == existing().handle
@@ -176,7 +180,125 @@ service cloud.firestore {
 
       allow delete: if isValidDomainHandle(handle)
         && isVerifiedUser()
-        && existing().ownerUid == request.auth.uid;
+        && (existing().ownerUid == request.auth.uid || isVerifiedPlatformOwner());
+    }
+
+    function isValidPluginDoc(data, pluginId) {
+      return data.id is string
+        && data.id == pluginId
+        && isValidId(data.id)
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 64
+        && data.tagline is string
+        && data.tagline.size() >= 6
+        && data.tagline.size() <= 160
+        && data.description is string
+        && data.description.size() >= 10
+        && data.description.size() <= 10000
+        && data.category is string
+        && data.category in ['Anti-Cheat', 'Economy', 'Administration', 'Mechanics', 'Optimization', 'Chat & Social', 'Minigames', 'Developer API']
+        && data.currentVersion is string
+        && data.currentVersion.size() >= 1
+        && data.currentVersion.size() <= 24
+        && data.ownerUid is string
+        && isValidId(data.ownerUid)
+        && data.status is string
+        && data.status in ['published', 'hidden']
+        && data.downloads is int
+        && data.downloads >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPluginReviewDoc(data, pluginId, reviewId) {
+      return data.id is string
+        && data.id == reviewId
+        && isValidId(data.id)
+        && data.pluginId is string
+        && data.pluginId == pluginId
+        && isValidId(data.pluginId)
+        && data.authorUid is string
+        && isValidId(data.authorUid)
+        && data.authorName is string
+        && data.authorName.size() >= 2
+        && data.authorName.size() <= 32
+        && data.rating is int
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 80
+        && data.comment is string
+        && data.comment.size() >= 4
+        && data.comment.size() <= 1500
+        && data.testedVersion is string
+        && data.testedVersion.size() >= 1
+        && data.testedVersion.size() <= 24
+        && (!('ownerReply' in data) || (data.ownerReply is string && data.ownerReply.size() >= 1 && data.ownerReply.size() <= 1000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /plugins/{pluginId} {
+      allow get: if isValidId(pluginId) && (existing().status == 'published' || isVerifiedPlatformOwner());
+      allow list: if resource.data.status == 'published' || isVerifiedPlatformOwner();
+
+      allow create: if isValidId(pluginId)
+        && isVerifiedPlatformOwner()
+        && incoming().keys().hasAll(['id', 'name', 'tagline', 'description', 'category', 'currentVersion', 'ownerUid', 'status', 'downloads', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'name', 'tagline', 'description', 'category', 'currentVersion', 'ownerUid', 'status', 'downloads', 'createdAt', 'updatedAt'])
+        && isValidPluginDoc(incoming(), pluginId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().downloads == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(pluginId)
+        && isVerifiedPlatformOwner()
+        && isValidPluginDoc(incoming(), pluginId)
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'description', 'category', 'currentVersion', 'status', 'downloads', 'updatedAt']);
+
+      allow delete: if isValidId(pluginId) && isVerifiedPlatformOwner();
+
+      match /reviews/{reviewId} {
+        allow get: if isValidId(pluginId) && isValidId(reviewId);
+        allow list: if resource.data.pluginId == pluginId;
+
+        allow create: if isValidId(pluginId)
+          && isValidId(reviewId)
+          && isVerifiedUser()
+          && incoming().keys().hasAll(['id', 'pluginId', 'authorUid', 'authorName', 'rating', 'title', 'comment', 'testedVersion', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'pluginId', 'authorUid', 'authorName', 'rating', 'title', 'comment', 'testedVersion', 'createdAt', 'updatedAt'])
+          && isValidPluginReviewDoc(incoming(), pluginId, reviewId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/plugins/$(pluginId));
+
+        allow update: if isValidId(pluginId)
+          && isValidId(reviewId)
+          && isVerifiedUser()
+          && isValidPluginReviewDoc(incoming(), pluginId, reviewId)
+          && incoming().id == existing().id
+          && incoming().pluginId == existing().pluginId
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (isVerifiedPlatformOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['ownerReply', 'updatedAt'])) ||
+            (existing().authorUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'title', 'comment', 'testedVersion', 'updatedAt']))
+          );
+
+        allow delete: if isValidId(pluginId)
+          && isValidId(reviewId)
+          && isVerifiedUser()
+          && (existing().authorUid == request.auth.uid || isVerifiedPlatformOwner());
+      }
     }
   }
 }

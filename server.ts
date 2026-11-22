@@ -21,6 +21,19 @@ import {
   validateMinecraftUsername,
 } from './src/utils/networkDomain';
 
+import {
+  PluginListing,
+  PluginReviewRecord,
+  PluginVersionRecord,
+  computeRatingBreakdown,
+  isOwnerUser,
+  sanitizeDownloadFilename,
+  slugifyPluginId,
+  validatePluginFileMeta,
+  validatePluginPayload,
+  validateReviewPayload,
+} from './src/utils/pluginMarketplace';
+
 const PORT = Number(process.env.PORT) || 3000;
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODEL = 'gemini-3.1-flash-lite';
@@ -28,6 +41,145 @@ const DEFAULT_ZONE_NAME = (process.env.CLOUDFLARE_ZONE_NAME || 'surgetrix.site')
 
 const DATA_DIR = path.resolve('.surgetrix-data');
 const DOMAINS_FILE = path.join(DATA_DIR, 'domains.json');
+const PLUGINS_FILE = path.join(DATA_DIR, 'plugins.json');
+const PLUGIN_FILES_DIR = path.resolve(DATA_DIR, 'plugin-files');
+
+const FIREBASE_PROJECT_ID: string = (() => {
+  try {
+    const raw = fs.readFileSync(path.resolve('firebase-applet-config.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { projectId?: string };
+    return typeof parsed.projectId === 'string' && parsed.projectId.trim()
+      ? parsed.projectId.trim()
+      : 'tidal-tuner-63bk6';
+  } catch {
+    return 'tidal-tuner-63bk6';
+  }
+})();
+
+interface VerifiedAuthUser {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  name: string;
+  isOwner: boolean;
+}
+
+let cachedGoogleCerts: { certs: Record<string, string>; expiresAt: number } | null = null;
+
+async function getGoogleSecureTokenCerts(): Promise<Record<string, string>> {
+  const now = Date.now();
+  if (cachedGoogleCerts && cachedGoogleCerts.expiresAt > now) {
+    return cachedGoogleCerts.certs;
+  }
+  const res = await fetch(
+    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
+  );
+  if (!res.ok) {
+    throw new Error('Unable to fetch Firebase verification certificates.');
+  }
+  const certs = (await res.json()) as Record<string, string>;
+  const cc = res.headers.get('cache-control') || '';
+  const maxAgeMatch = /max-age=(\d+)/i.exec(cc);
+  const ttlMs = maxAgeMatch ? Math.max(60, Number(maxAgeMatch[1])) * 1000 : 3600 * 1000;
+  cachedGoogleCerts = { certs, expiresAt: now + ttlMs };
+  return certs;
+}
+
+async function verifyFirebaseIdToken(authHeader?: string): Promise<VerifiedAuthUser | null> {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice('Bearer '.length).trim();
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+
+  try {
+    const headerJson = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as {
+      alg?: string;
+      kid?: string;
+    };
+    const payloadJson = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+      aud?: string;
+      iss?: string;
+      sub?: string;
+      exp?: number;
+      iat?: number;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+    };
+
+    if (headerJson.alg !== 'RS256' || !headerJson.kid) return null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (
+      payloadJson.aud !== FIREBASE_PROJECT_ID ||
+      payloadJson.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}` ||
+      typeof payloadJson.sub !== 'string' ||
+      !payloadJson.sub ||
+      typeof payloadJson.exp !== 'number' ||
+      payloadJson.exp <= nowSec ||
+      typeof payloadJson.iat !== 'number' ||
+      payloadJson.iat > nowSec + 300
+    ) {
+      return null;
+    }
+
+    const certs = await getGoogleSecureTokenCerts();
+    const pem = certs[headerJson.kid];
+    if (!pem) return null;
+
+    const verifier = crypto.createVerify('RSA-SHA256');
+    verifier.update(`${parts[0]}.${parts[1]}`);
+    verifier.end();
+    const signature = Buffer.from(parts[2], 'base64url');
+    const valid = verifier.verify(pem, signature);
+    if (!valid) return null;
+
+    const email = typeof payloadJson.email === 'string' ? payloadJson.email.trim() : '';
+    const emailVerified = payloadJson.email_verified === true;
+    const name =
+      typeof payloadJson.name === 'string' && payloadJson.name.trim()
+        ? payloadJson.name.trim().slice(0, 32)
+        : email.split('@')[0] || 'SurgePlayer';
+
+    return {
+      uid: payloadJson.sub,
+      email,
+      emailVerified,
+      name,
+      isOwner: isOwnerUser({ email, emailVerified }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readPluginStore(): PluginListing[] {
+  try {
+    if (!fs.existsSync(PLUGINS_FILE)) return [];
+    const raw = fs.readFileSync(PLUGINS_FILE, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as PluginListing[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePluginStore(list: PluginListing[]): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(PLUGINS_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+function resolveSafePluginFilePath(storedFileName: string): string | null {
+  const safeBase = path.basename(storedFileName);
+  if (!safeBase || safeBase !== storedFileName || safeBase.includes('..')) {
+    return null;
+  }
+  fs.mkdirSync(PLUGIN_FILES_DIR, { recursive: true });
+  const resolved = path.resolve(PLUGIN_FILES_DIR, safeBase);
+  if (!resolved.startsWith(PLUGIN_FILES_DIR + path.sep)) {
+    return null;
+  }
+  return resolved;
+}
 
 interface StoredDomainEntry {
   handle: string;
@@ -1074,6 +1226,551 @@ async function startServer() {
       return res.status(403).json({ ok: false, error: 'Not authorized to remove this free domain handle.' });
     }
 
+    await deleteCloudflareDnsRecords(handle);
+    delete store[handle];
+    writeDomainStore(store);
+    return res.json({ ok: true, deleted: handle });
+  });
+
+  // ==========================================
+  // BuiltByBit-Style Plugins Marketplace & Owner Control Panel APIs
+  // ==========================================
+  async function requireVerifiedAuth(
+    req: express.Request,
+    res: express.Response
+  ): Promise<VerifiedAuthUser | null> {
+    const authUser = await verifyFirebaseIdToken(req.headers.authorization);
+    if (!authUser) {
+      res.status(401).json({ ok: false, error: 'Sign in with a verified account first.' });
+      return null;
+    }
+    if (!authUser.emailVerified) {
+      res.status(403).json({ ok: false, error: 'Verify your email address before performing this action.' });
+      return null;
+    }
+    return authUser;
+  }
+
+  async function requirePlatformOwner(
+    req: express.Request,
+    res: express.Response
+  ): Promise<VerifiedAuthUser | null> {
+    const authUser = await verifyFirebaseIdToken(req.headers.authorization);
+    if (!authUser) {
+      res.status(401).json({ ok: false, error: 'Authentication required for Owner controls.' });
+      return null;
+    }
+    if (!authUser.isOwner) {
+      res.status(403).json({
+        ok: false,
+        error: 'Owner permission required. Only drminemc@gmail.com can upload or manage plugins.',
+      });
+      return null;
+    }
+    return authUser;
+  }
+
+  app.get('/api/plugins', async (req, res) => {
+    const includeHidden = req.query.includeHidden === '1';
+    const plugins = readPluginStore();
+    if (includeHidden) {
+      const authUser = await verifyFirebaseIdToken(req.headers.authorization);
+      if (authUser?.isOwner) {
+        return res.json({ ok: true, plugins });
+      }
+    }
+    const visible = plugins.filter((p) => p.status === 'published' && Boolean(p.storedFileName));
+    return res.json({ ok: true, plugins: visible });
+  });
+
+  app.get('/api/plugins/:id', async (req, res) => {
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const found = plugins.find((p) => p.id === pluginId || p.slug === pluginId);
+    if (!found) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+    if (found.status !== 'published' || !found.storedFileName) {
+      const authUser = await verifyFirebaseIdToken(req.headers.authorization);
+      if (!authUser?.isOwner) {
+        return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+      }
+    }
+    return res.json({ ok: true, plugin: found });
+  });
+
+  app.post('/api/plugins', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const validated = validatePluginPayload(req.body || {});
+    if (!validated.ok) {
+      return res.status(400).json({ ok: false, error: validated.error });
+    }
+
+    const plugins = readPluginStore();
+    const baseSlug = slugifyPluginId(validated.data.name);
+    let uniqueId = baseSlug;
+    let counter = 2;
+    while (plugins.some((p) => p.id === uniqueId || p.slug === uniqueId)) {
+      uniqueId = `${baseSlug}-${counter++}`;
+    }
+
+    const nowIso = new Date().toISOString();
+    const versionId = `ver-${Date.now()}`;
+    const releaseTitle =
+      typeof req.body?.releaseTitle === 'string' && req.body.releaseTitle.trim()
+        ? req.body.releaseTitle.trim().slice(0, 80)
+        : `Initial Release v${validated.data.version}`;
+    const changelog =
+      typeof req.body?.changelog === 'string' && req.body.changelog.trim()
+        ? req.body.changelog.trim().slice(0, 4000)
+        : 'Initial plugin release uploaded by Owner.';
+
+    const initialVersion: PluginVersionRecord = {
+      id: versionId,
+      version: validated.data.version,
+      title: releaseTitle,
+      changelog,
+      fileName: '',
+      storedFileName: '',
+      fileSize: 0,
+      sha256: '',
+      downloads: 0,
+      createdAt: nowIso,
+    };
+
+    const created: PluginListing = {
+      id: uniqueId,
+      slug: uniqueId,
+      name: validated.data.name,
+      tagline: validated.data.tagline,
+      description: validated.data.description,
+      category: validated.data.category,
+      platforms: validated.data.platforms,
+      mcVersions: validated.data.mcVersions,
+      priceLabel: validated.data.priceLabel,
+      featured: Boolean(req.body?.featured),
+      status: 'hidden',
+      authorName: owner.name || 'drminemc',
+      authorEmail: owner.email,
+      currentVersion: validated.data.version,
+      fileName: '',
+      storedFileName: '',
+      fileSize: 0,
+      sha256: '',
+      supportUrl: validated.data.supportUrl,
+      downloads: 0,
+      ratingAverage: 0,
+      reviewsCount: 0,
+      versions: [initialVersion],
+      reviews: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    plugins.unshift(created);
+    writePluginStore(plugins);
+    return res.status(201).json({ ok: true, plugin: created, versionId });
+  });
+
+  app.post('/api/plugins/:id/versions', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+
+    const version = typeof req.body?.version === 'string' ? req.body.version.trim() : '';
+    if (!/^[a-zA-Z0-9._-]{1,24}$/.test(version)) {
+      return res.status(400).json({ ok: false, error: 'Version must be 1–24 characters (e.g. 1.1.0).' });
+    }
+    const title =
+      typeof req.body?.title === 'string' && req.body.title.trim()
+        ? req.body.title.trim().slice(0, 80)
+        : `Update v${version}`;
+    const changelog =
+      typeof req.body?.changelog === 'string' && req.body.changelog.trim()
+        ? req.body.changelog.trim().slice(0, 4000)
+        : `Released version ${version}.`;
+
+    const versionId = `ver-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    const ver: PluginVersionRecord = {
+      id: versionId,
+      version,
+      title,
+      changelog,
+      fileName: '',
+      storedFileName: '',
+      fileSize: 0,
+      sha256: '',
+      downloads: 0,
+      createdAt: nowIso,
+    };
+    plugin.versions.unshift(ver);
+    plugin.updatedAt = nowIso;
+    writePluginStore(plugins);
+    return res.status(201).json({ ok: true, plugin, versionId });
+  });
+
+  app.post(
+    '/api/plugins/:id/versions/:versionId/file',
+    express.raw({
+      type: ['application/octet-stream', 'application/java-archive', 'application/zip'],
+      limit: '26mb',
+    }),
+    async (req, res) => {
+      const owner = await requirePlatformOwner(req, res);
+      if (!owner) return;
+
+      const pluginId = String(req.params.id || '').trim();
+      const versionId = String(req.params.versionId || '').trim();
+      const plugins = readPluginStore();
+      const plugin = plugins.find((p) => p.id === pluginId);
+      if (!plugin) {
+        return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+      }
+      const ver = plugin.versions.find((v) => v.id === versionId);
+      if (!ver) {
+        return res.status(404).json({ ok: false, error: 'Plugin version record not found.' });
+      }
+
+      const rawBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const rawFileName = String(req.headers['x-file-name'] || `${plugin.slug}-${ver.version}.jar`);
+      const fileCheck = validatePluginFileMeta(rawFileName, rawBuffer.length, rawBuffer);
+      if (!fileCheck.ok) {
+        return res.status(400).json({ ok: false, error: fileCheck.error });
+      }
+
+      const safeStoredName = `${plugin.id}-${ver.id}${fileCheck.extension}`.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const targetPath = resolveSafePluginFilePath(safeStoredName);
+      if (!targetPath) {
+        return res.status(400).json({ ok: false, error: 'Invalid storage filename.' });
+      }
+
+      fs.mkdirSync(PLUGIN_FILES_DIR, { recursive: true });
+      fs.writeFileSync(targetPath, rawBuffer);
+
+      const sha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
+      const nowIso = new Date().toISOString();
+      ver.fileName = fileCheck.safeName;
+      ver.storedFileName = safeStoredName;
+      ver.fileSize = rawBuffer.length;
+      ver.sha256 = sha256;
+
+      plugin.currentVersion = ver.version;
+      plugin.fileName = fileCheck.safeName;
+      plugin.storedFileName = safeStoredName;
+      plugin.fileSize = rawBuffer.length;
+      plugin.sha256 = sha256;
+      if (req.query.publish !== '0') {
+        plugin.status = 'published';
+      }
+      plugin.updatedAt = nowIso;
+      writePluginStore(plugins);
+
+      return res.json({ ok: true, plugin });
+    }
+  );
+
+  app.patch('/api/plugins/:id', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+
+    const merged = validatePluginPayload({
+      name: req.body?.name ?? plugin.name,
+      tagline: req.body?.tagline ?? plugin.tagline,
+      description: req.body?.description ?? plugin.description,
+      category: req.body?.category ?? plugin.category,
+      version: plugin.currentVersion,
+      platforms: req.body?.platforms ?? plugin.platforms,
+      mcVersions: req.body?.mcVersions ?? plugin.mcVersions,
+      priceLabel: req.body?.priceLabel ?? plugin.priceLabel,
+      supportUrl: req.body?.supportUrl ?? plugin.supportUrl,
+    });
+    if (!merged.ok) {
+      return res.status(400).json({ ok: false, error: merged.error });
+    }
+
+    plugin.name = merged.data.name;
+    plugin.tagline = merged.data.tagline;
+    plugin.description = merged.data.description;
+    plugin.category = merged.data.category;
+    plugin.platforms = merged.data.platforms;
+    plugin.mcVersions = merged.data.mcVersions;
+    plugin.priceLabel = merged.data.priceLabel;
+    plugin.supportUrl = merged.data.supportUrl;
+    if (typeof req.body?.featured === 'boolean') {
+      plugin.featured = req.body.featured;
+    }
+    if (req.body?.status === 'published' || req.body?.status === 'hidden') {
+      if (req.body.status === 'published' && !plugin.storedFileName) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Upload a .jar or .zip file before publishing this plugin.',
+        });
+      }
+      plugin.status = req.body.status;
+    }
+    plugin.updatedAt = new Date().toISOString();
+    writePluginStore(plugins);
+    return res.json({ ok: true, plugin });
+  });
+
+  app.delete('/api/plugins/:id', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const idx = plugins.findIndex((p) => p.id === pluginId);
+    if (idx === -1) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+
+    const [removed] = plugins.splice(idx, 1);
+    for (const ver of removed.versions) {
+      if (ver.storedFileName) {
+        const p = resolveSafePluginFilePath(ver.storedFileName);
+        if (p && fs.existsSync(p)) {
+          fs.unlinkSync(p);
+        }
+      }
+    }
+    writePluginStore(plugins);
+    return res.json({ ok: true, deleted: pluginId });
+  });
+
+  app.get('/api/plugins/:id/download', async (req, res) => {
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId || p.slug === pluginId);
+    if (!plugin || !plugin.storedFileName) {
+      return res.status(404).json({ ok: false, error: 'Plugin file not found.' });
+    }
+    if (plugin.status !== 'published') {
+      const authUser = await verifyFirebaseIdToken(req.headers.authorization);
+      if (!authUser?.isOwner) {
+        return res.status(404).json({ ok: false, error: 'Plugin file not found.' });
+      }
+    }
+
+    const requestedVersionId =
+      typeof req.query.versionId === 'string' ? req.query.versionId.trim() : '';
+    const ver = requestedVersionId
+      ? plugin.versions.find((v) => v.id === requestedVersionId && v.storedFileName)
+      : plugin.versions.find((v) => v.storedFileName === plugin.storedFileName) || plugin.versions[0];
+
+    const targetStoredName = ver?.storedFileName || plugin.storedFileName;
+    const downloadName = sanitizeDownloadFilename(ver?.fileName || plugin.fileName);
+    const filePath = resolveSafePluginFilePath(targetStoredName);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ ok: false, error: 'Plugin binary archive is missing from storage.' });
+    }
+
+    plugin.downloads += 1;
+    if (ver) ver.downloads += 1;
+    writePluginStore(plugins);
+
+    const mimeType = downloadName.toLowerCase().endsWith('.zip')
+      ? 'application/zip'
+      : 'application/java-archive';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+    return res.sendFile(filePath);
+  });
+
+  app.post('/api/plugins/:id/reviews', async (req, res) => {
+    const authUser = await requireVerifiedAuth(req, res);
+    if (!authUser) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId && p.status === 'published');
+    if (!plugin) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+
+    const validated = validateReviewPayload(req.body || {});
+    if (!validated.ok) {
+      return res.status(400).json({ ok: false, error: validated.error });
+    }
+
+    const nowIso = new Date().toISOString();
+    const existingReview = plugin.reviews.find((r) => r.authorUid === authUser.uid);
+    const displayName =
+      typeof req.body?.authorName === 'string' && req.body.authorName.trim().length >= 2
+        ? req.body.authorName.trim().replace(/[^a-zA-Z0-9_ .-]/g, '').slice(0, 32) || authUser.name
+        : authUser.name;
+
+    if (existingReview) {
+      existingReview.authorName = displayName;
+      existingReview.rating = validated.data.rating;
+      existingReview.title = validated.data.title;
+      existingReview.comment = validated.data.comment;
+      existingReview.testedVersion = validated.data.testedVersion;
+      existingReview.updatedAt = nowIso;
+    } else {
+      const review: PluginReviewRecord = {
+        id: `rev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        pluginId: plugin.id,
+        authorUid: authUser.uid,
+        authorName: displayName,
+        rating: validated.data.rating,
+        title: validated.data.title,
+        comment: validated.data.comment,
+        testedVersion: validated.data.testedVersion,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      plugin.reviews.unshift(review);
+    }
+
+    const stats = computeRatingBreakdown(plugin.reviews);
+    plugin.ratingAverage = stats.average;
+    plugin.reviewsCount = stats.count;
+    writePluginStore(plugins);
+
+    return res.json({ ok: true, plugin });
+  });
+
+  app.patch('/api/plugins/:id/reviews/:reviewId/reply', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const reviewId = String(req.params.reviewId || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+    const review = plugin.reviews.find((r) => r.id === reviewId);
+    if (!review) {
+      return res.status(404).json({ ok: false, error: 'Review not found.' });
+    }
+
+    const replyText = typeof req.body?.reply === 'string' ? req.body.reply.trim().slice(0, 1000) : '';
+    const nowIso = new Date().toISOString();
+    if (replyText) {
+      review.ownerReply = replyText;
+      review.ownerRepliedAt = nowIso;
+    } else {
+      delete review.ownerReply;
+      delete review.ownerRepliedAt;
+    }
+    review.updatedAt = nowIso;
+    writePluginStore(plugins);
+    return res.json({ ok: true, plugin });
+  });
+
+  app.delete('/api/plugins/:id/reviews/:reviewId', async (req, res) => {
+    const authUser = await requireVerifiedAuth(req, res);
+    if (!authUser) return;
+
+    const pluginId = String(req.params.id || '').trim();
+    const reviewId = String(req.params.reviewId || '').trim();
+    const plugins = readPluginStore();
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+    }
+    const revIdx = plugin.reviews.findIndex((r) => r.id === reviewId);
+    if (revIdx === -1) {
+      return res.status(404).json({ ok: false, error: 'Review not found.' });
+    }
+
+    const target = plugin.reviews[revIdx];
+    if (target.authorUid !== authUser.uid && !authUser.isOwner) {
+      return res.status(403).json({ ok: false, error: 'Not authorized to remove this review.' });
+    }
+
+    plugin.reviews.splice(revIdx, 1);
+    const stats = computeRatingBreakdown(plugin.reviews);
+    plugin.ratingAverage = stats.average;
+    plugin.reviewsCount = stats.count;
+    writePluginStore(plugins);
+    return res.json({ ok: true, plugin });
+  });
+
+  // Owner Control Panel Domain Management
+  app.get('/api/owner/domains', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const store = readDomainStore();
+    const list = Object.values(store).map((entry) => formatPublicDomain(entry));
+    return res.json({ ok: true, domains: list });
+  });
+
+  app.patch('/api/owner/domains/:handle', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const handle = sanitizeDomainHandle(String(req.params.handle || ''));
+    const store = readDomainStore();
+    const existing = store[handle];
+    if (!existing) {
+      return res.status(404).json({ ok: false, error: 'Domain not found.' });
+    }
+
+    if (typeof req.body?.serverName === 'string' && req.body.serverName.trim().length >= 2) {
+      existing.serverName = req.body.serverName.trim().slice(0, 64);
+    }
+    if (typeof req.body?.targetHost === 'string' && req.body.targetHost.trim()) {
+      const parsed = parseMinecraftHostPort(
+        req.body.targetHost.trim(),
+        Number(req.body?.targetPort) || existing.targetPort
+      );
+      if (!parsed.ok) {
+        return res.status(400).json({ ok: false, error: parsed.error });
+      }
+      const dnsCheck = await resolvePublicHostSafely(parsed.host);
+      if (!dnsCheck.ok) {
+        return res.status(400).json({ ok: false, error: dnsCheck.error });
+      }
+      existing.targetHost = parsed.host;
+      existing.targetPort = parsed.port;
+    }
+    if (
+      req.body?.edition === 'Java' ||
+      req.body?.edition === 'Bedrock' ||
+      req.body?.edition === 'Crossplay'
+    ) {
+      existing.edition = req.body.edition;
+    }
+    existing.updatedAt = new Date().toISOString();
+    existing.connectAddress = formatConnectAddress(
+      existing.workingDomain || `${handle}.duckdns.org`,
+      existing.targetPort,
+      existing.edition
+    );
+    writeDomainStore(store);
+    return res.json({ ok: true, domain: formatPublicDomain(existing) });
+  });
+
+  app.delete('/api/owner/domains/:handle', async (req, res) => {
+    const owner = await requirePlatformOwner(req, res);
+    if (!owner) return;
+
+    const handle = sanitizeDomainHandle(String(req.params.handle || ''));
+    const store = readDomainStore();
+    if (!store[handle]) {
+      return res.status(404).json({ ok: false, error: 'Domain not found.' });
+    }
     await deleteCloudflareDnsRecords(handle);
     delete store[handle];
     writeDomainStore(store);

@@ -15,12 +15,14 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { PRICING_TIERS, ServerListing } from '../data/catalog';
+import { CommunityRequest, PRICING_TIERS, ServerListing } from '../data/catalog';
 import { SERVER_CATEGORIES } from '../utils/minecraftExtraTools';
 import { THEME_PRESETS, ThemePreset, ThemeStyleId } from '../utils/themePresets';
 import { VerificationToken, isVerificationTokenValid } from '../utils/botVerification';
+import { PluginListing, isOwnerUser } from '../utils/pluginMarketplace';
 import { CustomServerAddressStudio, OwnedDomainItem } from './CustomServerAddressStudio';
 import { HumanVerificationWidget } from './HumanVerificationWidget';
+import { OwnerControlPanel } from './OwnerControlPanel';
 import { PlayerActivityChart } from './PlayerActivityChart';
 import { CopyButton } from './tools/TextAndServerTools';
 import { AuthUserState } from './AuthPage';
@@ -30,6 +32,7 @@ export type DashboardSection =
   | 'servers'
   | 'domains'
   | 'plugins'
+  | 'owner'
   | 'configs'
   | 'api-keys'
   | 'settings';
@@ -60,6 +63,7 @@ interface DashboardPageProps {
   servers: ServerListing[];
   onAddServer: (server: ServerListing) => void;
   onRemoveServer: (id: string) => void;
+  onUpdateServer: (id: string, patch: Partial<ServerListing>) => void;
   onToggleServerStatus: (id: string) => void;
   onRefreshServerStatus?: (id: string) => Promise<void>;
   ownedDomains: OwnedDomainItem[];
@@ -71,6 +75,11 @@ interface DashboardPageProps {
   apiKeys: ApiKeyItem[];
   onCreateApiKey: (label: string) => void;
   onDeleteApiKey: (id: string) => void;
+  plugins: PluginListing[];
+  onRefreshPlugins: () => Promise<void>;
+  communityRequests: CommunityRequest[];
+  onUpdateCommunityRequest: (id: string, patch: Partial<CommunityRequest>) => void;
+  onDeleteCommunityRequest: (id: string) => void;
 }
 
 const SIDEBAR_ITEMS: { id: DashboardSection; label: string; path: string; icon: React.ReactNode }[] = [
@@ -92,6 +101,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   servers,
   onAddServer,
   onRemoveServer,
+  onUpdateServer,
   onToggleServerStatus,
   onRefreshServerStatus,
   ownedDomains,
@@ -103,6 +113,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   apiKeys,
   onCreateApiKey,
   onDeleteApiKey,
+  plugins,
+  onRefreshPlugins,
+  communityRequests,
+  onUpdateCommunityRequest,
+  onDeleteCommunityRequest,
 }) => {
   // Server submission state
   const [srvName, setSrvName] = useState('');
@@ -274,6 +289,21 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
                   </button>
                 );
               })}
+              {isOwnerUser(user) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('/dashboard/owner')}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                  style={{
+                    borderRadius: 'var(--st-radius)',
+                    backgroundColor: section === 'owner' ? 'var(--st-accent-soft)' : 'transparent',
+                    color: 'var(--st-accent-text)',
+                  }}
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Owner Control Panel</span>
+                </button>
+              )}
             </nav>
 
             {!user && (
@@ -1138,6 +1168,21 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
                 </button>
               </div>
             </div>
+          )}
+          {section === 'owner' && (
+            <OwnerControlPanel
+              user={user}
+              plugins={plugins}
+              onRefreshPlugins={onRefreshPlugins}
+              servers={servers}
+              onRemoveServer={onRemoveServer}
+              onUpdateServer={onUpdateServer}
+              onRefreshServerStatus={onRefreshServerStatus}
+              communityRequests={communityRequests}
+              onUpdateCommunityRequest={onUpdateCommunityRequest}
+              onDeleteCommunityRequest={onDeleteCommunityRequest}
+              onNavigate={onNavigate}
+            />
           )}
         </div>
       </div>

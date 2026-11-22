@@ -127,6 +127,149 @@
         }
       },
       "required": ["handle", "ownerUid", "serverName", "targetHost", "targetPort", "edition", "createdAt", "updatedAt"]
+    },
+    "Plugin": {
+      "title": "Plugin",
+      "description": "Owner-published Minecraft plugin resource in BuiltByBit-style marketplace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique plugin ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Plugin display title.",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "tagline": {
+          "type": "string",
+          "description": "Short resource tagline.",
+          "minLength": 6,
+          "maxLength": 160
+        },
+        "description": {
+          "type": "string",
+          "description": "Full plugin overview documentation.",
+          "minLength": 10,
+          "maxLength": 10000
+        },
+        "category": {
+          "type": "string",
+          "description": "BuiltByBit resource category.",
+          "enum": ["Anti-Cheat", "Economy", "Administration", "Mechanics", "Optimization", "Chat & Social", "Minigames", "Developer API"]
+        },
+        "currentVersion": {
+          "type": "string",
+          "description": "Active plugin release version.",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Verified platform owner UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "status": {
+          "type": "string",
+          "description": "Visibility status.",
+          "enum": ["published", "hidden"]
+        },
+        "downloads": {
+          "type": "integer",
+          "description": "Total verified download counter."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["id", "name", "tagline", "description", "category", "currentVersion", "ownerUid", "status", "downloads", "createdAt", "updatedAt"]
+    },
+    "PluginReview": {
+      "title": "PluginReview",
+      "description": "Verified user star rating and review for a published plugin.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Review ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pluginId": {
+          "type": "string",
+          "description": "Parent plugin ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Review author UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Review author display name.",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "rating": {
+          "type": "integer",
+          "description": "Star rating from 1 to 5."
+        },
+        "title": {
+          "type": "string",
+          "description": "Short review headline.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "comment": {
+          "type": "string",
+          "description": "Detailed review body.",
+          "minLength": 4,
+          "maxLength": 1500
+        },
+        "testedVersion": {
+          "type": "string",
+          "description": "Minecraft version tested.",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "ownerReply": {
+          "type": "string",
+          "description": "Optional reply from drminemc@gmail.com.",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["id", "pluginId", "authorUid", "authorName", "rating", "title", "comment", "testedVersion", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -141,6 +284,14 @@
     "/domains/{handle}": {
       "schema": { "$ref": "#/entities/CustomDomain" },
       "description": "Stores verified free shareable /s/{handle} Minecraft server domain mappings without PII."
+    },
+    "/plugins/{pluginId}": {
+      "schema": { "$ref": "#/entities/Plugin" },
+      "description": "Owner-published Minecraft plugin catalog entries."
+    },
+    "/plugins/{pluginId}/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/PluginReview" },
+      "description": "User reviews and Owner replies for plugins."
     }
   }
 }

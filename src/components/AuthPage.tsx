@@ -24,6 +24,7 @@ import { auth, ensureUserProfile, googleProvider, updateUserProfileFields } from
 import { ThemeStyleId } from '../utils/themePresets';
 import { validateEmailInput, validateUsernameInput } from '../utils/userValidation';
 import { VerificationToken, isVerificationTokenValid } from '../utils/botVerification';
+import { isOwnerUser } from '../utils/pluginMarketplace';
 import { HumanVerificationWidget } from './HumanVerificationWidget';
 
 export interface AuthUserState {
@@ -279,7 +280,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 border: '1px solid var(--st-border-strong)',
               }}
             >
-              {user.plan} Plan
+              {isOwnerUser(user) ? 'Verified Owner' : `${user.plan} Plan`}
             </span>
           </div>
 
@@ -352,10 +353,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           )}
 
           <div className="flex flex-wrap gap-3 pt-2">
+            {isOwnerUser(user) && (
+              <button
+                type="button"
+                onClick={() => onNavigate('/dashboard/owner')}
+                className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-sm font-semibold cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Owner Control Panel</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onNavigate('/tools')}
-              className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-sm font-semibold cursor-pointer"
+              className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold cursor-pointer ${
+                isOwnerUser(user) ? 'st-btn-secondary' : 'st-btn-primary'
+              }`}
             >
               <Wrench className="w-4 h-4" />
               <span>Open Tools</span>

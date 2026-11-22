@@ -28,8 +28,10 @@ import {
   SavedConfigItem,
 } from './components/DashboardPage';
 import { OwnedDomainItem } from './components/CustomServerAddressStudio';
+import { PluginsPage } from './components/PluginsPage';
 import { ServerDomainPage } from './components/ServerDomainPage';
 import { sanitizeDomainHandle } from './utils/networkDomain';
+import { PluginListing, isOwnerUser } from './utils/pluginMarketplace';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
@@ -37,6 +39,7 @@ import {
   auth,
   db,
   ensureUserProfile,
+  getFirebaseAuthHeaders,
   handleFirestoreError,
   updateUserProfileFields,
 } from './firebase';
@@ -70,15 +73,16 @@ export default function App() {
   const [selectedToolCategory, setSelectedToolCategory] = useState<'All' | ToolCategory>('All');
   const [resources, setResources] = useState<ResourceItem[]>(() => {
     const stored = loadStored<ResourceItem[]>('surgetrix_resources', RESOURCES_CATALOG);
-    const normalized = stored.map((item) => ({
-      ...item,
-      kind: ((item.kind as string) === 'plugins' ? 'plugin' : item.kind) as ResourceItem['kind'],
-    }));
+    const normalized = stored
+      .filter((item) => item.kind !== 'plugin' && (item.kind as string) !== 'plugins')
+      .map((item) => ({ ...item }));
     const missingDefaults = RESOURCES_CATALOG.filter(
       (r) => !normalized.some((existing) => existing.id === r.id)
     );
     return missingDefaults.length > 0 ? [...normalized, ...missingDefaults] : normalized;
   });
+  const [plugins, setPlugins] = useState<PluginListing[]>([]);
+  const [pluginsLoading, setPluginsLoading] = useState<boolean>(true);
   const [communityRequests, setCommunityRequests] = useState<CommunityRequest[]>(() =>
     loadStored('surgetrix_requests', INITIAL_COMMUNITY_REQUESTS)
   );
@@ -99,6 +103,32 @@ export default function App() {
   );
   const [user, setUser] = useState<AuthUserState | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+  const refreshPlugins = async () => {
+    setPluginsLoading(true);
+    try {
+      const ownerMode = isOwnerUser(auth.currentUser);
+      const headers = ownerMode ? await getFirebaseAuthHeaders() : {};
+      const res = await fetch(ownerMode ? '/api/plugins?includeHidden=1' : '/api/plugins', {
+        headers,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        plugins?: PluginListing[];
+      };
+      if (res.ok && data.ok && Array.isArray(data.plugins)) {
+        setPlugins(data.plugins);
+      }
+    } catch {
+      // keep existing plugins state
+    } finally {
+      setPluginsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshPlugins();
+  }, [user?.uid, user?.emailVerified]);
 
   const activeTheme = getThemePreset(themeId);
 
@@ -385,6 +415,7 @@ export default function App() {
         'servers',
         'domains',
         'plugins',
+        'owner',
         'configs',
         'api-keys',
         'settings',
@@ -404,6 +435,9 @@ export default function App() {
           onAddServer={(srv) => setServers((prev) => [srv, ...prev])}
           onRemoveServer={(id) =>
             setServers((prev) => prev.filter((s) => s.id !== id))
+          }
+          onUpdateServer={(id, patch) =>
+            setServers((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)))
           }
           onToggleServerStatus={(id) =>
             setServers((prev) =>
@@ -446,6 +480,15 @@ export default function App() {
           onDeleteApiKey={(id) =>
             setApiKeys((prev) => prev.filter((k) => k.id !== id))
           }
+          plugins={plugins}
+          onRefreshPlugins={refreshPlugins}
+          communityRequests={communityRequests}
+          onUpdateCommunityRequest={(id, patch) =>
+            setCommunityRequests((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+          }
+          onDeleteCommunityRequest={(id) =>
+            setCommunityRequests((prev) => prev.filter((r) => r.id !== id))
+          }
         />
       );
     }
@@ -454,18 +497,32 @@ export default function App() {
       return <ChangelogPage onNavigate={navigate} />;
     }
 
+    if (path === '/plugin' || path === '/plugins' || path.startsWith('/plugin/')) {
+      const slug = path.startsWith('/plugin/')
+        ? path.slice('/plugin/'.length).split('/')[0]
+        : null;
+      return (
+        <PluginsPage
+          user={user}
+          plugins={plugins}
+          loading={pluginsLoading}
+          selectedSlug={slug}
+          onRefreshPlugins={refreshPlugins}
+          onPluginUpdated={(updated) =>
+            setPlugins((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+          }
+          onNavigate={navigate}
+        />
+      );
+    }
+
     if (
-      path === '/plugin' ||
-      path === '/plugins' ||
       path === '/resources' ||
       path === '/mods' ||
       path === '/apps' ||
       path === '/resource-packs'
     ) {
-      const normalizedKind: 'resources' | 'plugin' | 'mods' | 'apps' | 'resource-packs' =
-        path === '/plugins' || path === '/plugin'
-          ? 'plugin'
-          : (path.slice(1) as 'resources' | 'mods' | 'apps' | 'resource-packs');
+      const normalizedKind = path.slice(1) as 'resources' | 'mods' | 'apps' | 'resource-packs';
       return (
         <ResourcesPage
           kind={normalizedKind}
@@ -523,6 +580,14 @@ export default function App() {
       const matchedTools = TOOLS_CATALOG.filter(
         (t) => !q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)
       );
+      const matchedPlugins = plugins.filter(
+        (p) =>
+          p.status === 'published' &&
+          (!q ||
+            p.name.toLowerCase().includes(q) ||
+            p.tagline.toLowerCase().includes(q) ||
+            p.platforms.some((plat) => plat.toLowerCase().includes(q)))
+      );
       const matchedResources = resources.filter(
         (r) =>
           !q ||
@@ -541,7 +606,7 @@ export default function App() {
               Search results {q ? `for "${searchQuery}"` : ''}
             </h1>
             <p className="text-sm mt-1 tabular-nums" style={{ color: 'var(--st-text-muted)' }}>
-              {matchedTools.length} tools · {matchedResources.length} mods &amp; resources · {matchedGuides.length} guides
+              {matchedTools.length} tools · {matchedPlugins.length} plugins · {matchedResources.length} mods &amp; resources · {matchedGuides.length} guides
             </p>
           </div>
 
@@ -570,10 +635,40 @@ export default function App() {
             </section>
           )}
 
+          {matchedPlugins.length > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-lg font-semibold" style={{ color: 'var(--st-text)' }}>
+                Plugins
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {matchedPlugins.slice(0, 12).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => navigate(`/plugin/${p.slug}`)}
+                    className="text-left p-4 st-card st-card-interactive cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold" style={{ color: 'var(--st-text)' }}>
+                        {p.name}
+                      </span>
+                      <span className="text-[11px] font-semibold uppercase" style={{ color: 'var(--st-accent-text)' }}>
+                        v{p.currentVersion}
+                      </span>
+                    </div>
+                    <div className="text-xs mt-1" style={{ color: 'var(--st-text-muted)' }}>
+                      {p.tagline}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
           {matchedResources.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-lg font-semibold" style={{ color: 'var(--st-text)' }}>
-                Mods, Plugin &amp; Resources
+                Mods &amp; Resources
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {matchedResources.slice(0, 12).map((r) => (

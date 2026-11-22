@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { SurgeTrixLogo } from './SurgeTrixLogo';
 import { THEME_PRESETS, ThemePreset, ThemeStyleId } from '../utils/themePresets';
+import { isOwnerUser } from '../utils/pluginMarketplace';
 
 export interface LayoutProps {
   currentPath: string;
@@ -30,7 +31,7 @@ export interface LayoutProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   onSearchSubmit: (q: string) => void;
-  user: { username: string; plan: string } | null;
+  user: { username: string; plan: string; email?: string; emailVerified?: boolean } | null;
   onLogout: () => void;
   activeTheme: ThemePreset;
   onSelectTheme: (id: ThemeStyleId) => void;
@@ -190,8 +191,8 @@ export const Layout: React.FC<LayoutProps> = ({
               onClick={(e) => handleLinkClick(e, '/dashboard')}
               className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] font-medium transition-colors rounded-lg"
               style={{
-                backgroundColor: isActive('/dashboard') && !isActive('/dashboard/servers') ? 'var(--st-accent-soft)' : 'transparent',
-                color: isActive('/dashboard') && !isActive('/dashboard/servers') ? 'var(--st-accent-text)' : 'var(--st-text-muted)',
+                backgroundColor: isActive('/dashboard') && !isActive('/dashboard/servers') && !isActive('/dashboard/owner') ? 'var(--st-accent-soft)' : 'transparent',
+                color: isActive('/dashboard') && !isActive('/dashboard/servers') && !isActive('/dashboard/owner') ? 'var(--st-accent-text)' : 'var(--st-text-muted)',
               }}
             >
               <LayoutDashboard className="w-4 h-4 shrink-0" aria-hidden="true" />
@@ -209,6 +210,20 @@ export const Layout: React.FC<LayoutProps> = ({
               <Server className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>My Servers &amp; IP</span>
             </a>
+            {isOwnerUser(user) && (
+              <a
+                href="/dashboard/owner"
+                onClick={(e) => handleLinkClick(e, '/dashboard/owner')}
+                className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] font-semibold transition-colors rounded-lg"
+                style={{
+                  backgroundColor: isActive('/dashboard/owner') ? 'var(--st-accent-soft)' : 'transparent',
+                  color: isActive('/dashboard/owner') ? 'var(--st-accent-text)' : 'var(--st-accent-text)',
+                }}
+              >
+                <Shield className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Owner Panel</span>
+              </a>
+            )}
             {user ? (
               <div className="mt-1 space-y-1">
                 <a
@@ -496,6 +511,16 @@ export const Layout: React.FC<LayoutProps> = ({
                 >
                   My Servers &amp; IP
                 </a>
+                {isOwnerUser(user) && (
+                  <a
+                    href="/dashboard/owner"
+                    onClick={(e) => handleLinkClick(e, '/dashboard/owner')}
+                    className="px-3 py-2 text-xs font-semibold rounded-lg"
+                    style={{ color: 'var(--st-accent-text)' }}
+                  >
+                    Owner Panel
+                  </a>
+                )}
               </nav>
             </div>
           )}

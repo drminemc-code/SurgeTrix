@@ -390,7 +390,7 @@ export const ServersPage: React.FC<ServersPageProps> = ({
 };
 
 interface ResourcesPageProps {
-  kind: 'resources' | 'plugin' | 'mods' | 'apps' | 'resource-packs';
+  kind: 'resources' | 'mods' | 'apps' | 'resource-packs';
   resources: ResourceItem[];
   onPublishResource: (item: ResourceItem) => void;
   onNavigate: (path: string) => void;
@@ -426,11 +426,6 @@ export const ResourcesPage: React.FC<ResourcesPageProps> = ({
       desc: 'Browse Minecraft mods, companion apps, and resource packs in one organized hub.',
       cta: 'Publish resource',
     },
-    plugin: {
-      title: 'Minecraft Plugin',
-      desc: 'Browse community-tested server plugin packages for Paper, Purpur, Folia, and Velocity.',
-      cta: 'Publish plugin',
-    },
     mods: {
       title: 'Minecraft Mods',
       desc: 'Fabric, Forge, NeoForge, and Quilt client and server mods with direct Modrinth & official links.',
@@ -465,9 +460,7 @@ export const ResourcesPage: React.FC<ResourcesPageProps> = ({
       .map((s) => s.trim())
       .filter(Boolean);
     const defaultPlatforms =
-      targetKind === 'plugin'
-        ? ['Paper', 'Purpur']
-        : targetKind === 'mods'
+      targetKind === 'mods'
         ? ['Fabric', 'NeoForge']
         : targetKind === 'apps'
         ? ['Windows', 'macOS']
@@ -522,7 +515,7 @@ export const ResourcesPage: React.FC<ResourcesPageProps> = ({
             { label: 'Mods', path: '/mods', active: kind === 'mods' },
             { label: 'Apps', path: '/apps', active: kind === 'apps' },
             { label: 'Resource Packs', path: '/resource-packs', active: kind === 'resource-packs' },
-            { label: 'Plugin', path: '/plugin', active: kind === 'plugin' },
+            { label: 'Plugins', path: '/plugin', active: false },
           ].map((tab) => (
             <a
               key={tab.path}
@@ -631,7 +624,7 @@ export const ResourcesPage: React.FC<ResourcesPageProps> = ({
             />
             <input
               type="text"
-              placeholder={kind === 'mods' ? 'Loaders (e.g. Fabric, NeoForge)' : 'Platforms (e.g. Paper, Purpur)'}
+              placeholder={kind === 'mods' ? 'Loaders (e.g. Fabric, NeoForge)' : 'Platforms (e.g. Windows, macOS, 1.21.x)'}
               value={newPlatform}
               onChange={(e) => setNewPlatform(e.target.value)}
               className="px-3.5 py-2 st-surface-inset text-sm text-slate-900 dark:text-white"
