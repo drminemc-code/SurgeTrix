@@ -1,0 +1,182 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && data.username is string
+        && data.username.size() >= 2
+        && data.username.size() <= 32
+        && data.username.matches('^[a-zA-Z0-9_ .-]+$')
+        && data.plan is string
+        && data.plan in ['Free', 'Plus', 'Pro', 'Business']
+        && data.preferredTheme is string
+        && data.preferredTheme in ['cyber', 'obsidian', 'bedrock', 'daylight']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && incoming().keys().hasAll(['uid', 'username', 'plan', 'preferredTheme', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'username', 'plan', 'preferredTheme', 'createdAt', 'updatedAt'])
+        && isValidUserProfile(incoming(), userId)
+        && incoming().plan == 'Free'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().plan == existing().plan
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['username', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['preferredTheme', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['username', 'preferredTheme', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      match /private/{infoId} {
+        allow get: if isValidId(userId) && isValidId(infoId) && infoId == 'info' && isOwner(userId);
+        allow list: if false;
+
+        allow create: if isValidId(userId)
+          && isValidId(infoId)
+          && infoId == 'info'
+          && isVerifiedOwner(userId)
+          && incoming().keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isValidId(userId)
+          && isValidId(infoId)
+          && infoId == 'info'
+          && isVerifiedOwner(userId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt'])
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        allow delete: if false;
+      }
+    }
+
+    function isValidDomainHandle(handle) {
+      return handle is string
+        && handle.size() >= 2
+        && handle.size() <= 32
+        && handle.matches('^[a-z0-9][a-z0-9\\-]*[a-z0-9]$');
+    }
+
+    function isValidCustomDomain(data, handle) {
+      return data.handle is string
+        && data.handle == handle
+        && isValidDomainHandle(data.handle)
+        && data.ownerUid is string
+        && isValidId(data.ownerUid)
+        && data.serverName is string
+        && data.serverName.size() >= 2
+        && data.serverName.size() <= 64
+        && data.targetHost is string
+        && data.targetHost.size() >= 3
+        && data.targetHost.size() <= 253
+        && data.targetHost.matches('^[a-zA-Z0-9.-]+$')
+        && data.targetPort is int
+        && data.targetPort >= 1
+        && data.targetPort <= 65535
+        && data.edition is string
+        && data.edition in ['Java', 'Bedrock', 'Crossplay']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /domains/{handle} {
+      allow get: if isValidDomainHandle(handle);
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+
+      allow create: if isValidDomainHandle(handle)
+        && isVerifiedUser()
+        && incoming().keys().hasAll(['handle', 'ownerUid', 'serverName', 'targetHost', 'targetPort', 'edition', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['handle', 'ownerUid', 'serverName', 'targetHost', 'targetPort', 'edition', 'createdAt', 'updatedAt'])
+        && isValidCustomDomain(incoming(), handle)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidDomainHandle(handle)
+        && isVerifiedUser()
+        && existing().ownerUid == request.auth.uid
+        && isValidCustomDomain(incoming(), handle)
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().handle == existing().handle
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['serverName', 'targetHost', 'targetPort', 'edition', 'updatedAt']);
+
+      allow delete: if isValidDomainHandle(handle)
+        && isVerifiedUser()
+        && existing().ownerUid == request.auth.uid;
+    }
+  }
+}

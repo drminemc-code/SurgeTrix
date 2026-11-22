@@ -1,0 +1,6 @@
+{
+  "name": "SurgeTrix",
+  "description": "SURGETRIX — Everything Minecraft. One Place. Tools, server monitoring, plugins, mods, resource packs, guides, and community utilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe SurgeTrix account profile and preferences without PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID owning this profile.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Minecraft display username.",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_ .-]+$"
+        },
+        "plan": {
+          "type": "string",
+          "description": "Account tier.",
+          "enum": ["Free", "Plus", "Pro", "Business"]
+        },
+        "preferredTheme": {
+          "type": "string",
+          "description": "Saved SurgeTrix visual style.",
+          "enum": ["cyber", "obsidian", "bedrock", "daylight"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["uid", "username", "plan", "preferredTheme", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record containing verified user email.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID owning this private info document.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Account email address.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "CustomDomain": {
+      "title": "CustomDomain",
+      "description": "Public shareable free SurgeTrix server domain mapping pointing to a Minecraft server host and port.",
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string",
+          "description": "URL handle for /s/{handle}.",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of domain owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "serverName": {
+          "type": "string",
+          "description": "Minecraft server display name.",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "targetHost": {
+          "type": "string",
+          "description": "Public server hostname or IPv4.",
+          "minLength": 3,
+          "maxLength": 253,
+          "pattern": "^[a-zA-Z0-9.-]+$"
+        },
+        "targetPort": {
+          "type": "integer",
+          "description": "Minecraft server port (1-65535)."
+        },
+        "edition": {
+          "type": "string",
+          "description": "Minecraft edition.",
+          "enum": ["Java", "Bedrock", "Crossplay"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["handle", "ownerUid", "serverName", "targetHost", "targetPort", "edition", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Stores each signed-up user's SurgeTrix username, plan tier, and preferred visual style."
+    },
+    "/users/{userId}/private/{infoId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Strictly owner-only PII subcollection storing user email address."
+    },
+    "/domains/{handle}": {
+      "schema": { "$ref": "#/entities/CustomDomain" },
+      "description": "Stores verified free shareable /s/{handle} Minecraft server domain mappings without PII."
+    }
+  }
+}
