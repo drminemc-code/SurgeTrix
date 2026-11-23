@@ -22,6 +22,7 @@ import {
 } from './src/utils/networkDomain';
 
 import {
+  OWNER_EMAIL,
   PluginListing,
   PluginReviewRecord,
   PluginVersionRecord,
@@ -1374,6 +1375,82 @@ async function startServer() {
     return res.status(201).json({ ok: true, plugin: created, versionId });
   });
 
+  app.post('/api/plugins/submit', async (req, res) => {
+    const authUser = await requireVerifiedAuth(req, res);
+    if (!authUser) return;
+
+    const validated = validatePluginPayload(req.body || {});
+    if (!validated.ok) {
+      return res.status(400).json({ ok: false, error: validated.error });
+    }
+
+    const plugins = readPluginStore();
+    const baseSlug = slugifyPluginId(validated.data.name);
+    let uniqueId = baseSlug;
+    let counter = 2;
+    while (plugins.some((p) => p.id === uniqueId || p.slug === uniqueId)) {
+      uniqueId = `${baseSlug}-${counter++}`;
+    }
+
+    const nowIso = new Date().toISOString();
+    const versionId = `ver-${Date.now()}`;
+    const releaseTitle =
+      typeof req.body?.releaseTitle === 'string' && req.body.releaseTitle.trim()
+        ? req.body.releaseTitle.trim().slice(0, 80)
+        : `Submission v${validated.data.version}`;
+    const changelog =
+      typeof req.body?.changelog === 'string' && req.body.changelog.trim()
+        ? req.body.changelog.trim().slice(0, 4000)
+        : 'Community plugin submission awaiting Owner approval.';
+
+    const initialVersion: PluginVersionRecord = {
+      id: versionId,
+      version: validated.data.version,
+      title: releaseTitle,
+      changelog,
+      fileName: '',
+      storedFileName: '',
+      fileSize: 0,
+      sha256: '',
+      downloads: 0,
+      createdAt: nowIso,
+    };
+
+    const created: PluginListing & { submitterUid?: string } = {
+      id: uniqueId,
+      slug: uniqueId,
+      name: validated.data.name,
+      tagline: validated.data.tagline,
+      description: validated.data.description,
+      category: validated.data.category,
+      platforms: validated.data.platforms,
+      mcVersions: validated.data.mcVersions,
+      priceLabel: validated.data.priceLabel,
+      featured: false,
+      status: 'pending',
+      authorName: authUser.name || 'Developer',
+      authorEmail: '',
+      submitterUid: authUser.uid,
+      currentVersion: validated.data.version,
+      fileName: '',
+      storedFileName: '',
+      fileSize: 0,
+      sha256: '',
+      supportUrl: validated.data.supportUrl,
+      downloads: 0,
+      ratingAverage: 0,
+      reviewsCount: 0,
+      versions: [initialVersion],
+      reviews: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    plugins.unshift(created);
+    writePluginStore(plugins);
+    return res.status(201).json({ ok: true, plugin: created, versionId });
+  });
+
   app.post('/api/plugins/:id/versions', async (req, res) => {
     const owner = await requirePlatformOwner(req, res);
     if (!owner) return;
@@ -1425,8 +1502,8 @@ async function startServer() {
       limit: '26mb',
     }),
     async (req, res) => {
-      const owner = await requirePlatformOwner(req, res);
-      if (!owner) return;
+      const authUser = await requireVerifiedAuth(req, res);
+      if (!authUser) return;
 
       const pluginId = String(req.params.id || '').trim();
       const versionId = String(req.params.versionId || '').trim();
@@ -1434,6 +1511,13 @@ async function startServer() {
       const plugin = plugins.find((p) => p.id === pluginId);
       if (!plugin) {
         return res.status(404).json({ ok: false, error: 'Plugin not found.' });
+      }
+      const submitterUid = (plugin as PluginListing & { submitterUid?: string }).submitterUid;
+      if (!authUser.isOwner && (plugin.status !== 'pending' || submitterUid !== authUser.uid)) {
+        return res.status(403).json({
+          ok: false,
+          error: `Only the verified Owner (${OWNER_EMAIL}) or the pending plugin submitter can upload this archive.`,
+        });
       }
       const ver = plugin.versions.find((v) => v.id === versionId);
       if (!ver) {
@@ -1468,7 +1552,7 @@ async function startServer() {
       plugin.storedFileName = safeStoredName;
       plugin.fileSize = rawBuffer.length;
       plugin.sha256 = sha256;
-      if (req.query.publish !== '0') {
+      if (authUser.isOwner && req.query.publish !== '0') {
         plugin.status = 'published';
       }
       plugin.updatedAt = nowIso;
@@ -1515,7 +1599,11 @@ async function startServer() {
     if (typeof req.body?.featured === 'boolean') {
       plugin.featured = req.body.featured;
     }
-    if (req.body?.status === 'published' || req.body?.status === 'hidden') {
+    if (
+      req.body?.status === 'published' ||
+      req.body?.status === 'pending' ||
+      req.body?.status === 'hidden'
+    ) {
       if (req.body.status === 'published' && !plugin.storedFileName) {
         return res.status(400).json({
           ok: false,

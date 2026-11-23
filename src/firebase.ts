@@ -294,11 +294,13 @@ export async function deleteCustomDomainFromFirestore(handle: string): Promise<v
   }
 }
 
-export async function getFirebaseAuthHeaders(): Promise<Record<string, string>> {
+export async function getFirebaseAuthHeaders(
+  forceRefresh = false
+): Promise<Record<string, string>> {
   const current = auth.currentUser;
   if (!current) return {};
   try {
-    const token = await current.getIdToken();
+    const token = await current.getIdToken(forceRefresh);
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};

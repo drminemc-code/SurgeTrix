@@ -18,11 +18,11 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { getFirebaseAuthHeaders } from '../firebase';
 import {
   OWNER_EMAIL,
   PLUGIN_CATEGORIES,
   PLUGIN_PLATFORMS,
+  PluginCategory,
   PluginListing,
   PluginSortBy,
   computeRatingBreakdown,
@@ -30,6 +30,13 @@ import {
   formatBytes,
   isOwnerUser,
 } from '../utils/pluginMarketplace';
+import {
+  deletePluginReviewClient,
+  downloadPluginArchiveClient,
+  replyPluginReviewClient,
+  submitPluginForReviewClient,
+  submitPluginReviewClient,
+} from '../utils/pluginClient';
 import { AuthUserState } from './AuthPage';
 
 interface PluginsPageProps {
@@ -94,6 +101,23 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadMsg, setDownloadMsg] = useState('');
 
+  // Community plugin submission state (pending Owner approval)
+  const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [subName, setSubName] = useState('');
+  const [subVersion, setSubVersion] = useState('1.0.0');
+  const [subCategory, setSubCategory] = useState<PluginCategory>('Administration');
+  const [subPrice, setSubPrice] = useState('Free');
+  const [subTagline, setSubTagline] = useState('');
+  const [subDescription, setSubDescription] = useState('');
+  const [subMcVersions, setSubMcVersions] = useState('1.21.4');
+  const [subPlatforms, setSubPlatforms] = useState<string[]>(['Paper', 'Purpur']);
+  const [subSupportUrl, setSubSupportUrl] = useState('');
+  const [subChangelog, setSubChangelog] = useState('Initial community submission for review.');
+  const [subFile, setSubFile] = useState<File | null>(null);
+  const [subSubmitting, setSubSubmitting] = useState(false);
+  const [subError, setSubError] = useState('');
+  const [subSuccess, setSubSuccess] = useState('');
+
   const selectedPlugin = selectedSlug
     ? plugins.find((p) => p.slug === selectedSlug || p.id === selectedSlug) || null
     : null;
@@ -120,26 +144,12 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
     setDownloadingId(versionId || plugin.id);
     setDownloadMsg('');
     try {
-      const headers = await getFirebaseAuthHeaders();
-      const query = versionId ? `?versionId=${encodeURIComponent(versionId)}` : '';
-      const res = await fetch(`/api/plugins/${encodeURIComponent(plugin.id)}/download${query}`, {
-        headers,
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setDownloadMsg(err.error || 'Unable to download this plugin archive.');
+      const result = await downloadPluginArchiveClient(plugin, versionId, fileNameOverride);
+      if (!result.ok) {
+        setDownloadMsg(result.error);
         return;
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = fileNameOverride || plugin.fileName || `${plugin.slug}.jar`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      setDownloadMsg(`Downloaded ${fileNameOverride || plugin.fileName}`);
+      setDownloadMsg(`Downloaded ${result.fileName}`);
       await onRefreshPlugins();
     } catch {
       setDownloadMsg('Download interrupted. Please try again.');
@@ -155,31 +165,18 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
     setRevSuccess('');
     setRevSubmitting(true);
     try {
-      const authHeaders = await getFirebaseAuthHeaders();
-      const res = await fetch(`/api/plugins/${encodeURIComponent(selectedPlugin.id)}/reviews`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({
-          rating: revRating,
-          title: revTitle.trim(),
-          comment: revComment.trim(),
-          testedVersion: revTestedVersion.trim() || selectedPlugin.mcVersions[0] || '1.21.4',
-          authorName: user?.username,
-        }),
+      const result = await submitPluginReviewClient(selectedPlugin, {
+        rating: revRating,
+        title: revTitle.trim(),
+        comment: revComment.trim(),
+        testedVersion: revTestedVersion.trim() || selectedPlugin.mcVersions[0] || '1.21.4',
+        authorName: user?.username,
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        plugin?: PluginListing;
-        error?: string;
-      };
-      if (!res.ok || !data.ok || !data.plugin) {
-        setRevError(data.error || 'Could not submit review.');
+      if (!result.ok) {
+        setRevError(result.error);
         return;
       }
-      onPluginUpdated(data.plugin);
+      onPluginUpdated(result.plugin);
       setRevTitle('');
       setRevComment('');
       setRevSuccess('Your review has been published.');
@@ -192,35 +189,73 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
 
   const handleDeleteReview = async (pluginId: string, reviewId: string) => {
     try {
-      const authHeaders = await getFirebaseAuthHeaders();
-      const res = await fetch(
-        `/api/plugins/${encodeURIComponent(pluginId)}/reviews/${encodeURIComponent(reviewId)}`,
-        { method: 'DELETE', headers: authHeaders }
-      );
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; plugin?: PluginListing };
-      if (res.ok && data.ok && data.plugin) {
-        onPluginUpdated(data.plugin);
+      const result = await deletePluginReviewClient(pluginId, reviewId);
+      if (result.ok && result.plugin) {
+        onPluginUpdated(result.plugin);
       }
     } catch {
       // ignore
     }
   };
 
+  const handleToggleSubPlatform = (plat: string) => {
+    setSubPlatforms((prev) =>
+      prev.includes(plat) ? (prev.length > 1 ? prev.filter((p) => p !== plat) : prev) : [...prev, plat]
+    );
+  };
+
+  const handleSubmitPluginForReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubError('');
+    setSubSuccess('');
+    if (!subFile) {
+      setSubError('Select a .jar or .zip archive to submit for Owner approval.');
+      return;
+    }
+    setSubSubmitting(true);
+    try {
+      const result = await submitPluginForReviewClient({
+        name: subName.trim(),
+        version: subVersion.trim(),
+        category: subCategory,
+        priceLabel: subPrice.trim() || 'Free',
+        tagline: subTagline.trim(),
+        description: subDescription.trim(),
+        mcVersions: subMcVersions,
+        platforms: subPlatforms,
+        supportUrl: subSupportUrl.trim(),
+        releaseTitle: `Submission v${subVersion.trim() || '1.0.0'}`,
+        changelog: subChangelog.trim(),
+        file: subFile,
+      });
+      if (!result.ok) {
+        setSubError(result.error);
+        return;
+      }
+      setSubSuccess(
+        `Submitted "${subName.trim()}" for review. It will appear publicly once approved by Owner (${OWNER_EMAIL}).`
+      );
+      setSubName('');
+      setSubTagline('');
+      setSubDescription('');
+      setSubSupportUrl('');
+      setSubFile(null);
+      if (isOwner) {
+        await onRefreshPlugins();
+      }
+    } finally {
+      setSubSubmitting(false);
+    }
+  };
+
   const handleSubmitOwnerReply = async (pluginId: string, reviewId: string) => {
+    const targetPlugin = plugins.find((p) => p.id === pluginId) || selectedPlugin;
+    if (!targetPlugin) return;
     setReplySubmitting(true);
     try {
-      const authHeaders = await getFirebaseAuthHeaders();
-      const res = await fetch(
-        `/api/plugins/${encodeURIComponent(pluginId)}/reviews/${encodeURIComponent(reviewId)}/reply`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
-          body: JSON.stringify({ reply: replyDraft.trim() }),
-        }
-      );
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; plugin?: PluginListing };
-      if (res.ok && data.ok && data.plugin) {
-        onPluginUpdated(data.plugin);
+      const result = await replyPluginReviewClient(targetPlugin, reviewId, replyDraft.trim());
+      if (result.ok) {
+        onPluginUpdated(result.plugin);
         setReplyTargetId(null);
         setReplyDraft('');
       }
@@ -285,11 +320,11 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
           {isOwner && (
             <button
               type="button"
-              onClick={() => onNavigate('/dashboard/owner')}
+              onClick={() => onNavigate('/owner-dashboard')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 st-btn-secondary text-xs font-semibold cursor-pointer"
             >
               <ShieldCheck className="w-3.5 h-3.5" style={{ color: 'var(--st-accent-text)' }} />
-              <span>Manage in Owner Control Panel</span>
+              <span>Manage in Owner Dashboard</span>
             </button>
           )}
         </div>
@@ -331,9 +366,9 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
                 >
                   {selectedPlugin.priceLabel}
                 </span>
-                {selectedPlugin.status === 'hidden' && (
+                {selectedPlugin.status !== 'published' && (
                   <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/15 text-amber-400">
-                    Hidden Draft
+                    {selectedPlugin.status === 'pending' ? 'Pending Owner Approval' : 'Hidden Draft'}
                   </span>
                 )}
               </div>
@@ -919,17 +954,217 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
           </p>
         </div>
 
-        {isOwner && (
-          <button
-            type="button"
-            onClick={() => onNavigate('/dashboard/owner')}
-            className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Plugin (Owner)</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {isOwner ? (
+            <button
+              type="button"
+              onClick={() => onNavigate('/owner-dashboard')}
+              className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Owner Dashboard</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setSubError('');
+                setSubSuccess('');
+                setShowSubmitForm((v) => !v);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>{showSubmitForm ? 'Close Submission' : 'Submit Plugin'}</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {showSubmitForm && !isOwner && (
+        <div className="st-card p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
+                Submit Plugin for Owner Review
+              </h2>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--st-text-muted)' }}>
+                Submissions enter the Owner Dashboard queue ({OWNER_EMAIL}) and go live after approval.
+              </p>
+            </div>
+          </div>
+
+          {!user ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <p className="text-xs" style={{ color: 'var(--st-text-muted)' }}>
+                Sign in with a verified SurgeTrix account to submit a .jar or .zip plugin for approval.
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('/login')}
+                className="px-4 py-2 st-btn-primary text-xs font-semibold cursor-pointer"
+              >
+                Sign In to Submit
+              </button>
+            </div>
+          ) : !user.emailVerified ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <p className="text-xs text-amber-400">
+                Verify your email address before submitting a plugin for Owner review.
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('/login')}
+                className="px-3.5 py-2 st-btn-secondary text-xs font-semibold cursor-pointer"
+              >
+                Verify Account
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={(e) => void handleSubmitPluginForReview(e)} className="space-y-4">
+              {subError && (
+                <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-500">
+                  {subError}
+                </div>
+              )}
+              {subSuccess && (
+                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-500 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{subSuccess}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <input
+                  type="text"
+                  required
+                  value={subName}
+                  onChange={(e) => setSubName(e.target.value)}
+                  placeholder="Plugin Name"
+                  className="sm:col-span-2 px-3 py-2 st-surface-inset text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                />
+                <input
+                  type="text"
+                  required
+                  value={subVersion}
+                  onChange={(e) => setSubVersion(e.target.value)}
+                  placeholder="Version (1.0.0)"
+                  className="px-3 py-2 st-surface-inset font-mono text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                />
+                <select
+                  value={subCategory}
+                  onChange={(e) => setSubCategory(e.target.value as PluginCategory)}
+                  className="px-3 py-2 st-surface-inset text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                >
+                  {PLUGIN_CATEGORIES.filter((c) => c !== 'All Categories').map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  required
+                  value={subTagline}
+                  onChange={(e) => setSubTagline(e.target.value)}
+                  placeholder="Short one-line summary"
+                  className="sm:col-span-2 px-3 py-2 st-surface-inset text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                />
+                <input
+                  type="text"
+                  value={subMcVersions}
+                  onChange={(e) => setSubMcVersions(e.target.value)}
+                  placeholder="MC Versions (1.20.4, 1.21.4)"
+                  className="px-3 py-2 st-surface-inset font-mono text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                />
+                <input
+                  type="text"
+                  value={subPrice}
+                  onChange={(e) => setSubPrice(e.target.value)}
+                  placeholder="Price (Free)"
+                  className="px-3 py-2 st-surface-inset text-sm"
+                  style={{ color: 'var(--st-text)' }}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {PLUGIN_PLATFORMS.map((plat) => {
+                  const active = subPlatforms.includes(plat);
+                  return (
+                    <button
+                      key={plat}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => handleToggleSubPlatform(plat)}
+                      className="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer"
+                      style={{
+                        backgroundColor: active ? 'var(--st-accent-soft)' : 'var(--st-surface-inset)',
+                        border: active ? '1px solid var(--st-border-strong)' : '1px solid var(--st-border)',
+                        color: active ? 'var(--st-accent-text)' : 'var(--st-text-muted)',
+                      }}
+                    >
+                      {plat}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <textarea
+                rows={3}
+                required
+                value={subDescription}
+                onChange={(e) => setSubDescription(e.target.value)}
+                placeholder="Describe features, commands, permissions, and installation instructions..."
+                className="w-full p-3 st-surface-inset text-sm"
+                style={{ color: 'var(--st-text)' }}
+              />
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="url"
+                  value={subSupportUrl}
+                  onChange={(e) => setSubSupportUrl(e.target.value)}
+                  placeholder="Support / Docs URL (optional)"
+                  className="px-3 py-2 st-surface-inset text-xs"
+                  style={{ color: 'var(--st-text)' }}
+                />
+                <input
+                  type="text"
+                  value={subChangelog}
+                  onChange={(e) => setSubChangelog(e.target.value)}
+                  placeholder="Submission notes"
+                  className="px-3 py-2 st-surface-inset text-xs"
+                  style={{ color: 'var(--st-text)' }}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <input
+                  type="file"
+                  accept=".jar,.zip"
+                  required
+                  onChange={(e) => setSubFile(e.target.files?.[0] || null)}
+                  className="text-xs"
+                  style={{ color: 'var(--st-text-secondary)' }}
+                />
+                <button
+                  type="submit"
+                  disabled={subSubmitting}
+                  className="inline-flex items-center gap-2 px-4 py-2 st-btn-primary text-xs font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  {subSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                  <span>{subSubmitting ? 'Submitting…' : 'Submit for Approval'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
 
       {/* Resource Category Cross-Links */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1066,7 +1301,7 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
             </h2>
             <p className="text-xs leading-relaxed" style={{ color: 'var(--st-text-muted)' }}>
               {plugins.length === 0
-                ? `Only the verified SurgeTrix Owner (${OWNER_EMAIL}) can upload plugin archives here. Once uploaded, players and server owners can inspect changelogs, download .jar/.zip files, and post reviews.`
+                ? `Verified developers can submit .jar or .zip plugins for approval, and the SurgeTrix Owner (${OWNER_EMAIL}) publishes verified releases here.`
                 : 'Try clearing the search query or choosing a different category or server platform.'}
             </p>
           </div>
@@ -1086,11 +1321,11 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
             ) : isOwner ? (
               <button
                 type="button"
-                onClick={() => onNavigate('/dashboard/owner')}
+                onClick={() => onNavigate('/owner-dashboard')}
                 className="inline-flex items-center gap-2 px-4 py-2.5 st-btn-primary text-xs font-semibold cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>Open Owner Control Panel</span>
+                <span>Open Owner Dashboard</span>
               </button>
             ) : !user ? (
               <button

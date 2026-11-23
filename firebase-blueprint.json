@@ -140,6 +140,13 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "slug": {
+          "type": "string",
+          "description": "URL-safe plugin slug.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
         "name": {
           "type": "string",
           "description": "Plugin display title.",
@@ -163,11 +170,63 @@
           "description": "BuiltByBit resource category.",
           "enum": ["Anti-Cheat", "Economy", "Administration", "Mechanics", "Optimization", "Chat & Social", "Minigames", "Developer API"]
         },
+        "platforms": {
+          "type": "array",
+          "description": "Supported server platforms."
+        },
+        "mcVersions": {
+          "type": "array",
+          "description": "Supported Minecraft versions."
+        },
+        "priceLabel": {
+          "type": "string",
+          "description": "Price badge text.",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Featured marketplace flag."
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Owner display label.",
+          "minLength": 2,
+          "maxLength": 32
+        },
         "currentVersion": {
           "type": "string",
           "description": "Active plugin release version.",
           "minLength": 1,
           "maxLength": 24
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Uploaded archive filename.",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "fileSize": {
+          "type": "integer",
+          "description": "Uploaded archive byte length."
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Archive SHA-256 hex digest.",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "supportUrl": {
+          "type": "string",
+          "description": "Optional support URL.",
+          "minLength": 0,
+          "maxLength": 256
+        },
+        "versionsJson": {
+          "type": "string",
+          "description": "Serialized release version history.",
+          "minLength": 2,
+          "maxLength": 50000
         },
         "ownerUid": {
           "type": "string",
@@ -178,12 +237,24 @@
         },
         "status": {
           "type": "string",
-          "description": "Visibility status.",
-          "enum": ["published", "hidden"]
+          "description": "Visibility and moderation status.",
+          "enum": ["published", "pending", "hidden"]
         },
         "downloads": {
           "type": "integer",
           "description": "Total verified download counter."
+        },
+        "createdAtIso": {
+          "type": "string",
+          "description": "ISO creation timestamp.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "updatedAtIso": {
+          "type": "string",
+          "description": "ISO update timestamp.",
+          "minLength": 10,
+          "maxLength": 40
         },
         "createdAt": {
           "type": "string",
@@ -196,7 +267,51 @@
           "description": "Server update timestamp."
         }
       },
-      "required": ["id", "name", "tagline", "description", "category", "currentVersion", "ownerUid", "status", "downloads", "createdAt", "updatedAt"]
+      "required": ["id", "slug", "name", "tagline", "description", "category", "platforms", "mcVersions", "priceLabel", "featured", "authorName", "currentVersion", "fileName", "fileSize", "sha256", "supportUrl", "versionsJson", "ownerUid", "status", "downloads", "createdAtIso", "updatedAtIso", "createdAt", "updatedAt"]
+    },
+    "PluginFileChunk": {
+      "title": "PluginFileChunk",
+      "description": "Base64-encoded binary archive chunk for direct static-host downloads via Firestore.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Chunk document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pluginId": {
+          "type": "string",
+          "description": "Parent plugin ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "versionId": {
+          "type": "string",
+          "description": "Plugin release version ID.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "index": {
+          "type": "integer",
+          "description": "Zero-based chunk index."
+        },
+        "dataBase64": {
+          "type": "string",
+          "description": "Base64 slice of plugin binary.",
+          "minLength": 1,
+          "maxLength": 750000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["id", "pluginId", "versionId", "index", "dataBase64", "createdAt"]
     },
     "PluginReview": {
       "title": "PluginReview",
@@ -258,6 +373,24 @@
           "minLength": 1,
           "maxLength": 1000
         },
+        "ownerRepliedAt": {
+          "type": "string",
+          "description": "ISO timestamp of owner reply.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "createdAtIso": {
+          "type": "string",
+          "description": "ISO creation timestamp.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "updatedAtIso": {
+          "type": "string",
+          "description": "ISO update timestamp.",
+          "minLength": 10,
+          "maxLength": 40
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -270,6 +403,76 @@
         }
       },
       "required": ["id", "pluginId", "authorUid", "authorName", "rating", "title", "comment", "testedVersion", "createdAt", "updatedAt"]
+    },
+    "CommunityRequest": {
+      "title": "CommunityRequest",
+      "description": "Community tool request post subject to Owner Dashboard moderation.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique request ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Request headline.",
+          "minLength": 3,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed request summary.",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "category": {
+          "type": "string",
+          "description": "Tool request category.",
+          "enum": ["Minecraft Tools", "Server Owner Tools", "Player Utilities", "Developer Utilities"]
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Verified submitter UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Submitter display name without PII.",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "votes": {
+          "type": "integer",
+          "description": "Community upvote total."
+        },
+        "status": {
+          "type": "string",
+          "description": "Moderation and roadmap status.",
+          "enum": ["Under Review", "Planned", "In Progress", "Shipped"]
+        },
+        "createdAtIso": {
+          "type": "string",
+          "description": "ISO creation timestamp.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["id", "title", "description", "category", "authorUid", "authorName", "votes", "status", "createdAtIso", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -287,11 +490,19 @@
     },
     "/plugins/{pluginId}": {
       "schema": { "$ref": "#/entities/Plugin" },
-      "description": "Owner-published Minecraft plugin catalog entries."
+      "description": "Minecraft plugin catalog and pending submissions moderated by the verified owner."
+    },
+    "/plugins/{pluginId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/PluginFileChunk" },
+      "description": "Binary archive chunks for plugin downloads when hosted statically."
     },
     "/plugins/{pluginId}/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/PluginReview" },
       "description": "User reviews and Owner replies for plugins."
+    },
+    "/community_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/CommunityRequest" },
+      "description": "Community tool request posts moderated in Owner Dashboard."
     }
   }
 }

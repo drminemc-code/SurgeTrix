@@ -15,14 +15,14 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { CommunityRequest, PRICING_TIERS, ServerListing } from '../data/catalog';
+import { CommunityRequest, PRICING_TIERS, ResourceItem, ServerListing } from '../data/catalog';
 import { SERVER_CATEGORIES } from '../utils/minecraftExtraTools';
 import { THEME_PRESETS, ThemePreset, ThemeStyleId } from '../utils/themePresets';
 import { VerificationToken, isVerificationTokenValid } from '../utils/botVerification';
 import { PluginListing, isOwnerUser } from '../utils/pluginMarketplace';
 import { CustomServerAddressStudio, OwnedDomainItem } from './CustomServerAddressStudio';
 import { HumanVerificationWidget } from './HumanVerificationWidget';
-import { OwnerControlPanel } from './OwnerControlPanel';
+import { OwnerDashboard } from './OwnerDashboard';
 import { PlayerActivityChart } from './PlayerActivityChart';
 import { CopyButton } from './tools/TextAndServerTools';
 import { AuthUserState } from './AuthPage';
@@ -80,6 +80,8 @@ interface DashboardPageProps {
   communityRequests: CommunityRequest[];
   onUpdateCommunityRequest: (id: string, patch: Partial<CommunityRequest>) => void;
   onDeleteCommunityRequest: (id: string) => void;
+  resources: ResourceItem[];
+  onDeleteResource: (id: string) => void;
 }
 
 const SIDEBAR_ITEMS: { id: DashboardSection; label: string; path: string; icon: React.ReactNode }[] = [
@@ -118,6 +120,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   communityRequests,
   onUpdateCommunityRequest,
   onDeleteCommunityRequest,
+  resources,
+  onDeleteResource,
 }) => {
   // Server submission state
   const [srvName, setSrvName] = useState('');
@@ -292,7 +296,7 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
               {isOwnerUser(user) && (
                 <button
                   type="button"
-                  onClick={() => onNavigate('/dashboard/owner')}
+                  onClick={() => onNavigate('/owner-dashboard')}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
                   style={{
                     borderRadius: 'var(--st-radius)',
@@ -301,7 +305,7 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
                   }}
                 >
                   <ShieldCheck className="w-4 h-4" />
-                  <span>Owner Control Panel</span>
+                  <span>Owner Dashboard</span>
                 </button>
               )}
             </nav>
@@ -1170,7 +1174,7 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
             </div>
           )}
           {section === 'owner' && (
-            <OwnerControlPanel
+            <OwnerDashboard
               user={user}
               plugins={plugins}
               onRefreshPlugins={onRefreshPlugins}
@@ -1181,6 +1185,8 @@ public final class ${(pluginName || 'SurgeCoreBridge').replace(/[^A-Za-z0-9]/g, 
               communityRequests={communityRequests}
               onUpdateCommunityRequest={onUpdateCommunityRequest}
               onDeleteCommunityRequest={onDeleteCommunityRequest}
+              resources={resources}
+              onDeleteResource={onDeleteResource}
               onNavigate={onNavigate}
             />
           )}

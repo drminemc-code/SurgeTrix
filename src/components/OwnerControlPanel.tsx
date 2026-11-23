@@ -29,6 +29,14 @@ import {
   formatBytes,
   isOwnerUser,
 } from '../utils/pluginMarketplace';
+import {
+  createAndPublishPluginClient,
+  deletePluginClient,
+  deletePluginReviewClient,
+  pushPluginVersionClient,
+  replyPluginReviewClient,
+  updatePluginMetadataClient,
+} from '../utils/pluginClient';
 import { AuthUserState } from './AuthPage';
 
 interface OwnerDomainRecord {
@@ -210,70 +218,25 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
     }
 
     setUploading(true);
-    let createdPluginId = '';
     try {
-      const authHeaders = await getFirebaseAuthHeaders();
-      const createRes = await fetch('/api/plugins', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({
-          name: name.trim(),
-          version: version.trim(),
-          category,
-          priceLabel: priceLabel.trim() || 'Free',
-          tagline: tagline.trim(),
-          description: description.trim(),
-          mcVersions,
-          platforms,
-          supportUrl: supportUrl.trim(),
-          releaseTitle: releaseTitle.trim() || `Initial Release v${version.trim()}`,
-          changelog: changelog.trim(),
-          featured,
-        }),
+      const result = await createAndPublishPluginClient({
+        name: name.trim(),
+        version: version.trim(),
+        category,
+        priceLabel: priceLabel.trim() || 'Free',
+        tagline: tagline.trim(),
+        description: description.trim(),
+        mcVersions,
+        platforms,
+        supportUrl: supportUrl.trim(),
+        releaseTitle: releaseTitle.trim(),
+        changelog: changelog.trim(),
+        featured,
+        file: selectedFile,
       });
 
-      const createData = (await createRes.json().catch(() => ({}))) as {
-        ok?: boolean;
-        plugin?: PluginListing;
-        versionId?: string;
-        error?: string;
-      };
-      if (!createRes.ok || !createData.ok || !createData.plugin || !createData.versionId) {
-        setUploadError(createData.error || 'Could not create plugin metadata.');
-        return;
-      }
-
-      createdPluginId = createData.plugin.id;
-      const bytes = await selectedFile.arrayBuffer();
-      const fileRes = await fetch(
-        `/api/plugins/${encodeURIComponent(createdPluginId)}/versions/${encodeURIComponent(createData.versionId)}/file`,
-        {
-          method: 'POST',
-          headers: {
-            ...authHeaders,
-            'Content-Type': 'application/octet-stream',
-            'X-File-Name': selectedFile.name,
-          },
-          body: bytes,
-        }
-      );
-
-      const fileData = (await fileRes.json().catch(() => ({}))) as {
-        ok?: boolean;
-        plugin?: PluginListing;
-        error?: string;
-      };
-
-      if (!fileRes.ok || !fileData.ok) {
-        // Clean up orphan draft so plugins list stays clean
-        await fetch(`/api/plugins/${encodeURIComponent(createdPluginId)}`, {
-          method: 'DELETE',
-          headers: authHeaders,
-        }).catch(() => {});
-        setUploadError(fileData.error || 'Plugin file upload failed.');
+      if (!result.ok) {
+        setUploadError(result.error);
         return;
       }
 
@@ -286,15 +249,10 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
       setReleaseTitle('');
       setSelectedFile(null);
       setFeatured(false);
-    } catch {
-      if (createdPluginId) {
-        const authHeaders = await getFirebaseAuthHeaders().catch(() => ({}));
-        await fetch(`/api/plugins/${encodeURIComponent(createdPluginId)}`, {
-          method: 'DELETE',
-          headers: authHeaders,
-        }).catch(() => {});
-      }
-      setUploadError('Network error while uploading plugin.');
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : 'Unexpected error while uploading plugin.'
+      );
     } finally {
       setUploading(false);
     }
@@ -304,16 +262,13 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
     setActionBusy(true);
     setPanelMsg('');
     try {
-      const headers = await getFirebaseAuthHeaders();
       const nextStatus = pl.status === 'published' ? 'hidden' : 'published';
-      const res = await fetch(`/api/plugins/${encodeURIComponent(pl.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ status: nextStatus }),
-      });
-      if (res.ok) {
+      const result = await updatePluginMetadataClient(pl, { status: nextStatus });
+      if (result.ok) {
         await onRefreshPlugins();
         setPanelMsg(`Updated "${pl.name}" status to ${nextStatus}.`);
+      } else {
+        setPanelMsg(result.error);
       }
     } finally {
       setActionBusy(false);
@@ -323,14 +278,11 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
   const handleToggleFeatured = async (pl: PluginListing) => {
     setActionBusy(true);
     try {
-      const headers = await getFirebaseAuthHeaders();
-      const res = await fetch(`/api/plugins/${encodeURIComponent(pl.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ featured: !pl.featured }),
-      });
-      if (res.ok) {
+      const result = await updatePluginMetadataClient(pl, { featured: !pl.featured });
+      if (result.ok) {
         await onRefreshPlugins();
+      } else {
+        setPanelMsg(result.error);
       }
     } finally {
       setActionBusy(false);
@@ -339,27 +291,22 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
 
   const handleSavePluginEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingPluginId) return;
+    const target = plugins.find((p) => p.id === editingPluginId);
+    if (!target) return;
     setActionBusy(true);
     setPanelMsg('');
     try {
-      const headers = await getFirebaseAuthHeaders();
-      const res = await fetch(`/api/plugins/${encodeURIComponent(editingPluginId)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({
-          name: editName.trim(),
-          tagline: editTagline.trim(),
-          description: editDescription.trim(),
-          category: editCategory,
-          priceLabel: editPrice.trim() || 'Free',
-          mcVersions: editMcVersions,
-          supportUrl: editSupportUrl.trim(),
-        }),
+      const result = await updatePluginMetadataClient(target, {
+        name: editName.trim(),
+        tagline: editTagline.trim(),
+        description: editDescription.trim(),
+        category: editCategory,
+        priceLabel: editPrice.trim() || 'Free',
+        mcVersions: editMcVersions,
+        supportUrl: editSupportUrl.trim(),
       });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) {
-        setPanelMsg(data.error || 'Could not save edits.');
+      if (!result.ok) {
+        setPanelMsg(result.error);
         return;
       }
       await onRefreshPlugins();
@@ -372,48 +319,22 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
 
   const handlePushVersionUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!updatePluginId || !nextFile) {
+    const target = plugins.find((p) => p.id === updatePluginId);
+    if (!target || !nextFile) {
       setPanelMsg('Select a new .jar or .zip file for the version update.');
       return;
     }
     setActionBusy(true);
     setPanelMsg('');
     try {
-      const headers = await getFirebaseAuthHeaders();
-      const verRes = await fetch(`/api/plugins/${encodeURIComponent(updatePluginId)}/versions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({
-          version: nextVersion.trim(),
-          title: nextTitle.trim() || `Update v${nextVersion.trim()}`,
-          changelog: nextChangelog.trim(),
-        }),
+      const result = await pushPluginVersionClient(target, {
+        version: nextVersion.trim(),
+        title: nextTitle.trim(),
+        changelog: nextChangelog.trim(),
+        file: nextFile,
       });
-      const verData = (await verRes.json().catch(() => ({}))) as {
-        ok?: boolean;
-        versionId?: string;
-        error?: string;
-      };
-      if (!verRes.ok || !verData.ok || !verData.versionId) {
-        setPanelMsg(verData.error || 'Failed creating new version entry.');
-        return;
-      }
-      const bytes = await nextFile.arrayBuffer();
-      const fileRes = await fetch(
-        `/api/plugins/${encodeURIComponent(updatePluginId)}/versions/${encodeURIComponent(verData.versionId)}/file`,
-        {
-          method: 'POST',
-          headers: {
-            ...headers,
-            'Content-Type': 'application/octet-stream',
-            'X-File-Name': nextFile.name,
-          },
-          body: bytes,
-        }
-      );
-      if (!fileRes.ok) {
-        const err = (await fileRes.json().catch(() => ({}))) as { error?: string };
-        setPanelMsg(err.error || 'Failed uploading version file.');
+      if (!result.ok) {
+        setPanelMsg(result.error);
         return;
       }
       await onRefreshPlugins();
@@ -432,14 +353,12 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
     setActionBusy(true);
     setPanelMsg('');
     try {
-      const headers = await getFirebaseAuthHeaders();
-      const res = await fetch(`/api/plugins/${encodeURIComponent(pl.id)}`, {
-        method: 'DELETE',
-        headers,
-      });
-      if (res.ok) {
+      const result = await deletePluginClient(pl.id);
+      if (result.ok) {
         await onRefreshPlugins();
         setPanelMsg(`Deleted plugin "${pl.name}".`);
+      } else {
+        setPanelMsg(result.error);
       }
     } finally {
       setActionBusy(false);
@@ -1115,12 +1034,8 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
                       <button
                         type="button"
                         onClick={async () => {
-                          const headers = await getFirebaseAuthHeaders();
-                          const res = await fetch(
-                            `/api/plugins/${encodeURIComponent(pluginId)}/reviews/${encodeURIComponent(rev.id)}`,
-                            { method: 'DELETE', headers }
-                          );
-                          if (res.ok) await onRefreshPlugins();
+                          const result = await deletePluginReviewClient(pluginId, rev.id);
+                          if (result.ok) await onRefreshPlugins();
                         }}
                         className="p-1.5 st-btn-secondary text-rose-500 cursor-pointer"
                         aria-label="Delete review"
@@ -1145,16 +1060,14 @@ export const OwnerControlPanel: React.FC<OwnerControlPanelProps> = ({
                       <button
                         type="button"
                         onClick={async () => {
-                          const headers = await getFirebaseAuthHeaders();
-                          const res = await fetch(
-                            `/api/plugins/${encodeURIComponent(pluginId)}/reviews/${encodeURIComponent(rev.id)}/reply`,
-                            {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json', ...headers },
-                              body: JSON.stringify({ reply: replyText.trim() }),
-                            }
+                          const targetPlugin = plugins.find((p) => p.id === pluginId);
+                          if (!targetPlugin) return;
+                          const result = await replyPluginReviewClient(
+                            targetPlugin,
+                            rev.id,
+                            replyText.trim()
                           );
-                          if (res.ok) {
+                          if (result.ok) {
                             await onRefreshPlugins();
                             setReplyKey(null);
                           }

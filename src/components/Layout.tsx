@@ -212,16 +212,19 @@ export const Layout: React.FC<LayoutProps> = ({
             </a>
             {isOwnerUser(user) && (
               <a
-                href="/dashboard/owner"
-                onClick={(e) => handleLinkClick(e, '/dashboard/owner')}
+                href="/owner-dashboard"
+                onClick={(e) => handleLinkClick(e, '/owner-dashboard')}
                 className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] font-semibold transition-colors rounded-lg"
                 style={{
-                  backgroundColor: isActive('/dashboard/owner') ? 'var(--st-accent-soft)' : 'transparent',
-                  color: isActive('/dashboard/owner') ? 'var(--st-accent-text)' : 'var(--st-accent-text)',
+                  backgroundColor:
+                    isActive('/owner-dashboard') || isActive('/dashboard/owner')
+                      ? 'var(--st-accent-soft)'
+                      : 'transparent',
+                  color: 'var(--st-accent-text)',
                 }}
               >
                 <Shield className="w-4 h-4 shrink-0" aria-hidden="true" />
-                <span>Owner Panel</span>
+                <span>Owner Dashboard</span>
               </a>
             )}
             {user ? (
@@ -513,12 +516,12 @@ export const Layout: React.FC<LayoutProps> = ({
                 </a>
                 {isOwnerUser(user) && (
                   <a
-                    href="/dashboard/owner"
-                    onClick={(e) => handleLinkClick(e, '/dashboard/owner')}
+                    href="/owner-dashboard"
+                    onClick={(e) => handleLinkClick(e, '/owner-dashboard')}
                     className="px-3 py-2 text-xs font-semibold rounded-lg"
                     style={{ color: 'var(--st-accent-text)' }}
                   >
-                    Owner Panel
+                    Owner Dashboard
                   </a>
                 )}
               </nav>

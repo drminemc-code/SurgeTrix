@@ -187,6 +187,10 @@ service cloud.firestore {
       return data.id is string
         && data.id == pluginId
         && isValidId(data.id)
+        && data.slug is string
+        && data.slug.size() >= 1
+        && data.slug.size() <= 128
+        && isValidId(data.slug)
         && data.name is string
         && data.name.size() >= 2
         && data.name.size() <= 64
@@ -198,17 +202,69 @@ service cloud.firestore {
         && data.description.size() <= 10000
         && data.category is string
         && data.category in ['Anti-Cheat', 'Economy', 'Administration', 'Mechanics', 'Optimization', 'Chat & Social', 'Minigames', 'Developer API']
+        && data.platforms is list
+        && data.platforms.size() >= 1
+        && data.platforms.size() <= 6
+        && data.platforms[0] is string
+        && data.mcVersions is list
+        && data.mcVersions.size() >= 1
+        && data.mcVersions.size() <= 12
+        && data.mcVersions[0] is string
+        && data.priceLabel is string
+        && data.priceLabel.size() >= 1
+        && data.priceLabel.size() <= 24
+        && data.featured is bool
+        && data.authorName is string
+        && data.authorName.size() >= 2
+        && data.authorName.size() <= 32
         && data.currentVersion is string
         && data.currentVersion.size() >= 1
         && data.currentVersion.size() <= 24
+        && data.fileName is string
+        && data.fileName.size() <= 128
+        && data.fileSize is int
+        && data.fileSize >= 0
+        && data.sha256 is string
+        && data.sha256.size() <= 128
+        && data.supportUrl is string
+        && data.supportUrl.size() <= 256
+        && data.versionsJson is string
+        && data.versionsJson.size() >= 2
+        && data.versionsJson.size() <= 50000
         && data.ownerUid is string
         && isValidId(data.ownerUid)
         && data.status is string
-        && data.status in ['published', 'hidden']
+        && data.status in ['published', 'pending', 'hidden']
         && data.downloads is int
         && data.downloads >= 0
+        && data.createdAtIso is string
+        && data.createdAtIso.size() >= 10
+        && data.createdAtIso.size() <= 40
+        && data.updatedAtIso is string
+        && data.updatedAtIso.size() >= 10
+        && data.updatedAtIso.size() <= 40
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidPluginChunkDoc(data, pluginId, chunkId) {
+      return data.id is string
+        && data.id == chunkId
+        && isValidId(data.id)
+        && data.pluginId is string
+        && data.pluginId == pluginId
+        && isValidId(data.pluginId)
+        && data.versionId is string
+        && data.versionId.size() >= 1
+        && data.versionId.size() <= 64
+        && isValidId(data.versionId)
+        && data.index is int
+        && data.index >= 0
+        && data.index <= 100
+        && data.dataBase64 is string
+        && data.dataBase64.size() >= 1
+        && data.dataBase64.size() <= 750000
+        && data.createdAt is timestamp;
     }
 
     function isValidPluginReviewDoc(data, pluginId, reviewId) {
@@ -236,34 +292,109 @@ service cloud.firestore {
         && data.testedVersion.size() >= 1
         && data.testedVersion.size() <= 24
         && (!('ownerReply' in data) || (data.ownerReply is string && data.ownerReply.size() >= 1 && data.ownerReply.size() <= 1000))
+        && (!('ownerRepliedAt' in data) || (data.ownerRepliedAt is string && data.ownerRepliedAt.size() >= 10 && data.ownerRepliedAt.size() <= 40))
+        && (!('createdAtIso' in data) || (data.createdAtIso is string && data.createdAtIso.size() >= 10 && data.createdAtIso.size() <= 40))
+        && (!('updatedAtIso' in data) || (data.updatedAtIso is string && data.updatedAtIso.size() >= 10 && data.updatedAtIso.size() <= 40))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCommunityRequestDoc(data, requestId) {
+      return data.id is string
+        && data.id == requestId
+        && isValidId(data.id)
+        && data.title is string
+        && data.title.size() >= 3
+        && data.title.size() <= 100
+        && data.description is string
+        && data.description.size() >= 10
+        && data.description.size() <= 1000
+        && data.category is string
+        && data.category in ['Minecraft Tools', 'Server Owner Tools', 'Player Utilities', 'Developer Utilities']
+        && data.authorUid is string
+        && isValidId(data.authorUid)
+        && data.authorName is string
+        && data.authorName.size() >= 2
+        && data.authorName.size() <= 32
+        && data.votes is int
+        && data.votes >= 0
+        && data.status is string
+        && data.status in ['Under Review', 'Planned', 'In Progress', 'Shipped']
+        && data.createdAtIso is string
+        && data.createdAtIso.size() >= 10
+        && data.createdAtIso.size() <= 40
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
     match /plugins/{pluginId} {
-      allow get: if isValidId(pluginId) && (existing().status == 'published' || isVerifiedPlatformOwner());
-      allow list: if resource.data.status == 'published' || isVerifiedPlatformOwner();
+      allow get: if isValidId(pluginId) && (
+        existing().status == 'published' ||
+        isVerifiedPlatformOwner() ||
+        (isSignedIn() && existing().ownerUid == request.auth.uid)
+      );
+      allow list: if resource.data.status == 'published' ||
+        isVerifiedPlatformOwner() ||
+        (isSignedIn() && resource.data.ownerUid == request.auth.uid);
 
       allow create: if isValidId(pluginId)
-        && isVerifiedPlatformOwner()
-        && incoming().keys().hasAll(['id', 'name', 'tagline', 'description', 'category', 'currentVersion', 'ownerUid', 'status', 'downloads', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'name', 'tagline', 'description', 'category', 'currentVersion', 'ownerUid', 'status', 'downloads', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasAll(['id', 'slug', 'name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'authorName', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'ownerUid', 'status', 'downloads', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'slug', 'name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'authorName', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'ownerUid', 'status', 'downloads', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
         && isValidPluginDoc(incoming(), pluginId)
         && incoming().ownerUid == request.auth.uid
         && incoming().downloads == 0
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && (
+          isVerifiedPlatformOwner() ||
+          (isVerifiedUser() && incoming().status == 'pending' && incoming().featured == false)
+        );
 
       allow update: if isValidId(pluginId)
         && isVerifiedPlatformOwner()
         && isValidPluginDoc(incoming(), pluginId)
         && incoming().id == existing().id
+        && incoming().slug == existing().slug
         && incoming().ownerUid == existing().ownerUid
         && incoming().createdAt == existing().createdAt
+        && incoming().createdAtIso == existing().createdAtIso
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'description', 'category', 'currentVersion', 'status', 'downloads', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'status', 'downloads', 'updatedAtIso', 'updatedAt']);
 
       allow delete: if isValidId(pluginId) && isVerifiedPlatformOwner();
+
+      match /chunks/{chunkId} {
+        allow get: if isValidId(pluginId)
+          && isValidId(chunkId)
+          && (
+            get(/databases/$(database)/documents/plugins/$(pluginId)).data.status == 'published' ||
+            isVerifiedPlatformOwner() ||
+            (isSignedIn() && get(/databases/$(database)/documents/plugins/$(pluginId)).data.ownerUid == request.auth.uid)
+          );
+        allow list: if isValidId(pluginId)
+          && (
+            get(/databases/$(database)/documents/plugins/$(pluginId)).data.status == 'published' ||
+            isVerifiedPlatformOwner() ||
+            (isSignedIn() && get(/databases/$(database)/documents/plugins/$(pluginId)).data.ownerUid == request.auth.uid)
+          );
+
+        allow create: if isValidId(pluginId)
+          && isValidId(chunkId)
+          && incoming().keys().hasAll(['id', 'pluginId', 'versionId', 'index', 'dataBase64', 'createdAt'])
+          && incoming().keys().hasOnly(['id', 'pluginId', 'versionId', 'index', 'dataBase64', 'createdAt'])
+          && isValidPluginChunkDoc(incoming(), pluginId, chunkId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/plugins/$(pluginId))
+          && (
+            isVerifiedPlatformOwner() ||
+            (isVerifiedUser()
+              && get(/databases/$(database)/documents/plugins/$(pluginId)).data.ownerUid == request.auth.uid
+              && get(/databases/$(database)/documents/plugins/$(pluginId)).data.status == 'pending')
+          );
+
+        allow update: if false;
+        allow delete: if isValidId(pluginId) && isValidId(chunkId) && isVerifiedPlatformOwner();
+      }
 
       match /reviews/{reviewId} {
         allow get: if isValidId(pluginId) && isValidId(reviewId);
@@ -273,7 +404,7 @@ service cloud.firestore {
           && isValidId(reviewId)
           && isVerifiedUser()
           && incoming().keys().hasAll(['id', 'pluginId', 'authorUid', 'authorName', 'rating', 'title', 'comment', 'testedVersion', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'pluginId', 'authorUid', 'authorName', 'rating', 'title', 'comment', 'testedVersion', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'pluginId', 'authorUid', 'authorName', 'rating', 'title', 'comment', 'testedVersion', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
           && isValidPluginReviewDoc(incoming(), pluginId, reviewId)
           && incoming().authorUid == request.auth.uid
           && incoming().createdAt == request.time
@@ -290,8 +421,8 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
-            (isVerifiedPlatformOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['ownerReply', 'updatedAt'])) ||
-            (existing().authorUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'title', 'comment', 'testedVersion', 'updatedAt']))
+            (isVerifiedPlatformOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['ownerReply', 'ownerRepliedAt', 'updatedAtIso', 'updatedAt'])) ||
+            (existing().authorUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'title', 'comment', 'testedVersion', 'updatedAtIso', 'updatedAt']))
           );
 
         allow delete: if isValidId(pluginId)
@@ -299,6 +430,41 @@ service cloud.firestore {
           && isVerifiedUser()
           && (existing().authorUid == request.auth.uid || isVerifiedPlatformOwner());
       }
+    }
+
+    match /community_requests/{requestId} {
+      allow get: if isValidId(requestId);
+      allow list: if resource.data.status in ['Under Review', 'Planned', 'In Progress', 'Shipped'];
+
+      allow create: if isValidId(requestId)
+        && isVerifiedUser()
+        && incoming().keys().hasAll(['id', 'title', 'description', 'category', 'authorUid', 'authorName', 'votes', 'status', 'createdAtIso', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'title', 'description', 'category', 'authorUid', 'authorName', 'votes', 'status', 'createdAtIso', 'createdAt', 'updatedAt'])
+        && isValidCommunityRequestDoc(incoming(), requestId)
+        && incoming().authorUid == request.auth.uid
+        && incoming().votes == 1
+        && incoming().status == 'Under Review'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(requestId)
+        && isVerifiedUser()
+        && isValidCommunityRequestDoc(incoming(), requestId)
+        && incoming().id == existing().id
+        && incoming().authorUid == existing().authorUid
+        && incoming().authorName == existing().authorName
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdAtIso == existing().createdAtIso
+        && incoming().updatedAt == request.time
+        && (
+          (isVerifiedPlatformOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          ((incoming().votes == existing().votes + 1 || (existing().votes > 0 && incoming().votes == existing().votes - 1))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['votes', 'updatedAt']))
+        );
+
+      allow delete: if isValidId(requestId)
+        && isVerifiedUser()
+        && (existing().authorUid == request.auth.uid || isVerifiedPlatformOwner());
     }
   }
 }

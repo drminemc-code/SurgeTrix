@@ -31,7 +31,15 @@ import { OwnedDomainItem } from './components/CustomServerAddressStudio';
 import { PluginsPage } from './components/PluginsPage';
 import { ServerDomainPage } from './components/ServerDomainPage';
 import { sanitizeDomainHandle } from './utils/networkDomain';
-import { PluginListing, isOwnerUser } from './utils/pluginMarketplace';
+import { PluginListing } from './utils/pluginMarketplace';
+import { listPluginsClient } from './utils/pluginClient';
+import {
+  createCommunityRequestInFirestore,
+  deleteCommunityRequestInFirestore,
+  listCommunityRequestsFromFirestore,
+  updateCommunityRequestStatusInFirestore,
+  updateCommunityRequestVotesInFirestore,
+} from './utils/communityClient';
 import { getRedirectResult, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
@@ -39,7 +47,6 @@ import {
   auth,
   db,
   ensureUserProfile,
-  getFirebaseAuthHeaders,
   handleFirestoreError,
   updateUserProfileFields,
 } from './firebase';
@@ -104,21 +111,15 @@ export default function App() {
   const [user, setUser] = useState<AuthUserState | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
+  const [deletedRequestIds, setDeletedRequestIds] = useState<string[]>(() =>
+    loadStored('surgetrix_deleted_request_ids', [])
+  );
+
   const refreshPlugins = async () => {
     setPluginsLoading(true);
     try {
-      const ownerMode = isOwnerUser(auth.currentUser);
-      const headers = ownerMode ? await getFirebaseAuthHeaders() : {};
-      const res = await fetch(ownerMode ? '/api/plugins?includeHidden=1' : '/api/plugins', {
-        headers,
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        plugins?: PluginListing[];
-      };
-      if (res.ok && data.ok && Array.isArray(data.plugins)) {
-        setPlugins(data.plugins);
-      }
+      const list = await listPluginsClient();
+      setPlugins(list);
     } catch {
       // keep existing plugins state
     } finally {
@@ -129,6 +130,27 @@ export default function App() {
   useEffect(() => {
     void refreshPlugins();
   }, [user?.uid, user?.emailVerified]);
+
+  useEffect(() => {
+    let active = true;
+    void listCommunityRequestsFromFirestore().then((remoteRequests) => {
+      if (!active || remoteRequests.length === 0) return;
+      setCommunityRequests((prev) => {
+        const deletedSet = new Set(deletedRequestIds);
+        const byId = new Map<string, CommunityRequest>();
+        for (const item of prev) {
+          if (!deletedSet.has(item.id)) byId.set(item.id, item);
+        }
+        for (const item of remoteRequests) {
+          if (!deletedSet.has(item.id)) byId.set(item.id, item);
+        }
+        return Array.from(byId.values()).sort((a, b) => b.votes - a.votes);
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [user?.uid]);
 
   const activeTheme = getThemePreset(themeId);
 
@@ -266,10 +288,11 @@ export default function App() {
       localStorage.setItem('surgetrix_saved_configs', JSON.stringify(savedConfigs));
       localStorage.setItem('surgetrix_api_keys', JSON.stringify(apiKeys));
       localStorage.setItem('surgetrix_owned_domains', JSON.stringify(ownedDomains));
+      localStorage.setItem('surgetrix_deleted_request_ids', JSON.stringify(deletedRequestIds));
     } catch {
       // ignore storage failures
     }
-  }, [resources, communityRequests, votedIds, servers, savedConfigs, apiKeys, ownedDomains]);
+  }, [resources, communityRequests, votedIds, servers, savedConfigs, apiKeys, ownedDomains, deletedRequestIds]);
 
   const handleSelectTheme = (nextTheme: ThemeStyleId) => {
     setThemeId(nextTheme);
@@ -299,6 +322,8 @@ export default function App() {
 
   const handleToggleVote = (id: string) => {
     const already = votedIds.includes(id);
+    const target = communityRequests.find((r) => r.id === id);
+    const nextVotes = target ? Math.max(0, target.votes + (already ? -1 : 1)) : 1;
     setVotedIds((prev) => (already ? prev.filter((x) => x !== id) : [...prev, id]));
     setCommunityRequests((prev) =>
       prev
@@ -307,11 +332,13 @@ export default function App() {
         )
         .sort((a, b) => b.votes - a.votes)
     );
+    void updateCommunityRequestVotesInFirestore(id, nextVotes);
   };
 
   const handleAddRequest = (title: string, description: string, category: string) => {
+    const requestId = `req-${Date.now()}`;
     const item: CommunityRequest = {
-      id: `req-${Date.now()}`,
+      id: requestId,
       title,
       description,
       category,
@@ -322,6 +349,12 @@ export default function App() {
     };
     setCommunityRequests((prev) => [item, ...prev]);
     setVotedIds((prev) => [...prev, item.id]);
+    void createCommunityRequestInFirestore({
+      id: requestId,
+      title,
+      description,
+      category,
+    });
   };
 
   const handleRefreshServerPing = async (id: string) => {
@@ -424,10 +457,18 @@ export default function App() {
       );
     }
 
-    if (path === '/dashboard' || path.startsWith('/dashboard/') || path === '/developers/api-keys') {
-      const rawSub = path === '/developers/api-keys'
-        ? 'api-keys'
-        : path.replace('/dashboard', '').replace(/^\//, '').split('/')[0] || 'overview';
+    if (
+      path === '/dashboard' ||
+      path.startsWith('/dashboard/') ||
+      path === '/owner-dashboard' ||
+      path === '/developers/api-keys'
+    ) {
+      const rawSub =
+        path === '/developers/api-keys'
+          ? 'api-keys'
+          : path === '/owner-dashboard'
+          ? 'owner'
+          : path.replace('/dashboard', '').replace(/^\//, '').split('/')[0] || 'overview';
       const sub = rawSub === 'subdomains' ? 'domains' : rawSub;
       const validSections: DashboardSection[] = [
         'overview',
@@ -502,11 +543,20 @@ export default function App() {
           plugins={plugins}
           onRefreshPlugins={refreshPlugins}
           communityRequests={communityRequests}
-          onUpdateCommunityRequest={(id, patch) =>
-            setCommunityRequests((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
-          }
-          onDeleteCommunityRequest={(id) =>
-            setCommunityRequests((prev) => prev.filter((r) => r.id !== id))
+          onUpdateCommunityRequest={(id, patch) => {
+            setCommunityRequests((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+            if (patch.status) {
+              void updateCommunityRequestStatusInFirestore(id, patch.status);
+            }
+          }}
+          onDeleteCommunityRequest={(id) => {
+            setCommunityRequests((prev) => prev.filter((r) => r.id !== id));
+            setDeletedRequestIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+            void deleteCommunityRequestInFirestore(id);
+          }}
+          resources={resources}
+          onDeleteResource={(id) =>
+            setResources((prev) => prev.filter((r) => r.id !== id))
           }
         />
       );

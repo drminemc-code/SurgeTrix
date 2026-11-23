@@ -162,11 +162,14 @@ test('firestore.rules secures /domains/{handle} against spoofing and query scrap
   assert.match(rulesText, /incoming\(\)\.ownerUid == existing\(\)\.ownerUid/);
 });
 
-test('firestore.rules restricts /plugins to verified drminemc@gmail.com and secures reviews', () => {
+test('firestore.rules restricts /plugins approval to verified drminemc@gmail.com and secures pending submissions & community_requests', () => {
   const rulesText = fs.readFileSync('firestore.rules', 'utf8');
   assert.match(rulesText, /request\.auth\.token\.email == 'drminemc@gmail\.com'/);
   assert.match(rulesText, /match \/plugins\/\{pluginId\}/);
-  assert.match(rulesText, /allow create: if isValidId\(pluginId\)\s+&& isVerifiedPlatformOwner\(\)/);
+  assert.match(rulesText, /incoming\(\)\.status == 'pending' && incoming\(\)\.featured == false/);
+  assert.match(rulesText, /allow update: if isValidId\(pluginId\)\s+&& isVerifiedPlatformOwner\(\)/);
+  assert.match(rulesText, /match \/chunks\/\{chunkId\}/);
   assert.match(rulesText, /match \/reviews\/\{reviewId\}/);
+  assert.match(rulesText, /match \/community_requests\/\{requestId\}/);
   assert.match(rulesText, /exists\(\/databases\/\$\(database\)\/documents\/plugins\/\$\(pluginId\)\)/);
 });

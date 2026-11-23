@@ -68,7 +68,7 @@ export interface PluginListing {
   mcVersions: string[];
   priceLabel: string;
   featured: boolean;
-  status: 'published' | 'hidden';
+  status: 'published' | 'pending' | 'hidden';
   authorName: string;
   authorEmail: string;
   currentVersion: string;
