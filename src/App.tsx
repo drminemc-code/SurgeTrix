@@ -32,7 +32,7 @@ import { PluginsPage } from './components/PluginsPage';
 import { ServerDomainPage } from './components/ServerDomainPage';
 import { sanitizeDomainHandle } from './utils/networkDomain';
 import { PluginListing, isOwnerUser } from './utils/pluginMarketplace';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { getRedirectResult, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
   OperationType,
@@ -159,6 +159,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    void getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          return ensureUserProfile(result.user, themeId);
+        }
+        return null;
+      })
+      .catch((err) => {
+        console.error('Google redirect auth completion failed:', err);
+      });
+
     let unsubProfile: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
       if (unsubProfile) {
@@ -176,13 +187,16 @@ export default function App() {
         fbUser.displayName || fbUser.email?.split('@')[0] || 'SurgePlayer';
 
       if (!fbUser.emailVerified) {
-        setUser({
+        setUser((prev) => ({
           uid: fbUser.uid,
-          username: fallbackName,
+          username:
+            prev && prev.uid === fbUser.uid && prev.username
+              ? prev.username
+              : fallbackName,
           email: fbUser.email || '',
           plan: 'Free',
           emailVerified: false,
-        });
+        }));
         setAuthLoading(false);
         return;
       }
@@ -227,7 +241,12 @@ export default function App() {
           }
         },
         (err) => {
-          handleFirestoreError(err, OperationType.GET, userPath);
+          if (!auth.currentUser) return;
+          try {
+            handleFirestoreError(err, OperationType.GET, userPath);
+          } catch {
+            // Logged structured error without crashing React listener thread
+          }
         }
       );
     });

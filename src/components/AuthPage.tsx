@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
+  KeyRound,
   Loader2,
   LogOut,
   MailCheck,
@@ -15,17 +16,23 @@ import {
   createUserWithEmailAndPassword,
   reload,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from 'firebase/auth';
 import { auth, ensureUserProfile, googleProvider, updateUserProfileFields } from '../firebase';
 import { ThemeStyleId } from '../utils/themePresets';
-import { validateEmailInput, validateUsernameInput } from '../utils/userValidation';
-import { VerificationToken, isVerificationTokenValid } from '../utils/botVerification';
+import {
+  AuthErrorDetails,
+  mapAuthError,
+  sanitizeUsername,
+  validateEmailInput,
+  validateUsernameInput,
+} from '../utils/userValidation';
 import { isOwnerUser } from '../utils/pluginMarketplace';
-import { HumanVerificationWidget } from './HumanVerificationWidget';
 
 export interface AuthUserState {
   uid: string;
@@ -42,35 +49,6 @@ interface AuthPageProps {
   activeThemeId: ThemeStyleId;
   onProfileUpdated: (username: string) => void;
   onNavigate: (path: string) => void;
-}
-
-function mapAuthError(err: unknown): { message: string; needsEmailProviderNote?: boolean } {
-  const code = (err as { code?: string })?.code || '';
-  if (code === 'auth/operation-not-allowed') {
-    return {
-      message:
-        'Email/Password sign-in is not enabled in your Firebase Console yet. Enable it under Authentication -> Sign-in method -> Email/Password, or use Continue with Google below.',
-      needsEmailProviderNote: true,
-    };
-  }
-  if (code === 'auth/email-already-in-use') {
-    return { message: 'An account with this email already exists. Try signing in instead.' };
-  }
-  if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-    return { message: 'Incorrect email or password. Please check your credentials and try again.' };
-  }
-  if (code === 'auth/weak-password') {
-    return { message: 'Password must be at least 6 characters long.' };
-  }
-  if (code === 'auth/popup-closed-by-user') {
-    return { message: 'Google sign-in popup was closed before completing.' };
-  }
-  if (code === 'auth/unauthorized-domain') {
-    return { message: 'This domain is not authorized for Google Sign-In in Firebase Console.' };
-  }
-  return {
-    message: err instanceof Error ? err.message : 'Authentication failed. Please try again.',
-  };
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({
@@ -90,9 +68,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
   const [submitting, setSubmitting] = useState(false);
   const [googleSubmitting, setGoogleSubmitting] = useState(false);
-  const [verificationToken, setVerificationToken] = useState<VerificationToken | null>(null);
-  const [verifyResetCounter, setVerifyResetCounter] = useState(0);
-  const [error, setError] = useState('');
+  const [resetSending, setResetSending] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
+  const [refreshingVerification, setRefreshingVerification] = useState(false);
+
+  const [errorDetails, setErrorDetails] = useState<AuthErrorDetails | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
 
   // Account edit state when signed in
@@ -101,9 +81,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
   useEffect(() => {
     setMode(initialMode);
-    setError('');
-    setStatusMessage('');
-    setVerifyResetCounter((c) => c + 1);
+    setErrorDetails(null);
   }, [initialMode]);
 
   useEffect(() => {
@@ -112,19 +90,53 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     }
   }, [user?.username]);
 
+  const currentHostname =
+    typeof window !== 'undefined' ? window.location.hostname : undefined;
+
   const handleGoogleAuth = async () => {
-    if (!isVerificationTokenValid(verificationToken)) {
-      setError('Please complete the human verification check first.');
-      return;
-    }
-    setError('');
+    setErrorDetails(null);
     setStatusMessage('');
     setGoogleSubmitting(true);
     try {
       const cred = await signInWithPopup(auth, googleProvider);
-      await ensureUserProfile(cred.user, activeThemeId);
+      const profile = await ensureUserProfile(cred.user, activeThemeId);
+      if (profile) {
+        onProfileUpdated(profile.username);
+      }
+      setStatusMessage('Signed in with Google.');
     } catch (err) {
-      setError(mapAuthError(err).message);
+      setErrorDetails(mapAuthError(err, currentHostname));
+    } finally {
+      setGoogleSubmitting(false);
+    }
+  };
+
+  const handleGoogleRedirectFallback = async () => {
+    setErrorDetails(null);
+    setStatusMessage('');
+    setGoogleSubmitting(true);
+    try {
+      await signInWithRedirect(auth, googleProvider);
+    } catch (err) {
+      setErrorDetails(mapAuthError(err, currentHostname));
+      setGoogleSubmitting(false);
+    }
+  };
+
+  const handleSwitchToGoogleFromUnverified = async () => {
+    setErrorDetails(null);
+    setStatusMessage('');
+    setGoogleSubmitting(true);
+    try {
+      await signOut(auth);
+      const cred = await signInWithPopup(auth, googleProvider);
+      const profile = await ensureUserProfile(cred.user, activeThemeId);
+      if (profile) {
+        onProfileUpdated(profile.username);
+      }
+      setStatusMessage('Signed in and verified with Google!');
+    } catch (err) {
+      setErrorDetails(mapAuthError(err, currentHostname));
     } finally {
       setGoogleSubmitting(false);
     }
@@ -132,33 +144,29 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setErrorDetails(null);
     setStatusMessage('');
 
-    if (!isVerificationTokenValid(verificationToken)) {
-      setError('Please complete the human verification check before continuing.');
-      return;
-    }
-
-    const emailErr = validateEmailInput(email);
+    const trimmedEmail = email.trim();
+    const emailErr = validateEmailInput(trimmedEmail);
     if (emailErr) {
-      setError(emailErr);
+      setErrorDetails({ message: emailErr });
       return;
     }
 
     if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+      setErrorDetails({ message: 'Password must be at least 6 characters.' });
       return;
     }
 
     if (mode === 'signup') {
       const userErr = validateUsernameInput(username);
       if (userErr) {
-        setError(userErr);
+        setErrorDetails({ message: userErr });
         return;
       }
       if (password !== confirmPassword) {
-        setError('Passwords do not match.');
+        setErrorDetails({ message: 'Passwords do not match.' });
         return;
       }
     }
@@ -166,44 +174,89 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     setSubmitting(true);
     try {
       if (mode === 'signup') {
-        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        await updateProfile(cred.user, { displayName: username.trim() });
-        await sendEmailVerification(cred.user);
-        setStatusMessage(
-          'Account created! Check your inbox for the verification link to sync your SurgeTrix cloud profile.'
-        );
+        const cleanDisplay = sanitizeUsername(username);
+        const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+        await updateProfile(cred.user, { displayName: cleanDisplay });
+        onProfileUpdated(cleanDisplay);
+        try {
+          await sendEmailVerification(cred.user);
+          setStatusMessage(
+            `Account created for ${trimmedEmail}! Check your inbox (and spam folder) for the verification link, then click "I've verified — Refresh".`
+          );
+        } catch {
+          setStatusMessage(
+            `Account created for ${trimmedEmail}! Click "Resend email" below if you need a new verification link.`
+          );
+        }
       } else {
-        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const cred = await signInWithEmailAndPassword(auth, trimmedEmail, password);
         if (cred.user.emailVerified) {
-          await ensureUserProfile(cred.user, activeThemeId);
+          const profile = await ensureUserProfile(
+            cred.user,
+            activeThemeId,
+            cred.user.displayName || undefined
+          );
+          if (profile) {
+            onProfileUpdated(profile.username);
+          }
+          setStatusMessage('Signed in successfully!');
+        } else {
+          setStatusMessage(
+            'Signed in. Verify your email address using the link in your inbox to unlock cloud sync.'
+          );
         }
       }
     } catch (err) {
-      setError(mapAuthError(err).message);
+      setErrorDetails(mapAuthError(err, currentHostname));
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handlePasswordReset = async () => {
+    setErrorDetails(null);
+    setStatusMessage('');
+    const trimmedEmail = email.trim();
+    const emailErr = validateEmailInput(trimmedEmail);
+    if (emailErr) {
+      setErrorDetails({ message: 'Enter your account email address above first so we can send a reset link.' });
+      return;
+    }
+    setResetSending(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      setStatusMessage(`Password reset email sent to ${trimmedEmail}. Check your inbox and spam folder.`);
+    } catch (err) {
+      setErrorDetails(mapAuthError(err, currentHostname));
+    } finally {
+      setResetSending(false);
+    }
+  };
+
   const handleResendVerification = async () => {
     if (!auth.currentUser) return;
-    setError('');
+    setErrorDetails(null);
     setStatusMessage('');
+    setResendingVerification(true);
     try {
       await sendEmailVerification(auth.currentUser);
       setStatusMessage('Verification email sent. Check your inbox and spam folder.');
     } catch (err) {
-      setError(mapAuthError(err).message);
+      setErrorDetails(mapAuthError(err, currentHostname));
+    } finally {
+      setResendingVerification(false);
     }
   };
 
   const handleRefreshVerification = async () => {
     if (!auth.currentUser) return;
-    setError('');
+    setErrorDetails(null);
     setStatusMessage('');
+    setRefreshingVerification(true);
     try {
       await reload(auth.currentUser);
       if (auth.currentUser.emailVerified) {
+        await auth.currentUser.getIdToken(true);
         const profile = await ensureUserProfile(
           auth.currentUser,
           activeThemeId,
@@ -214,10 +267,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         }
         setStatusMessage('Email verified and cloud profile synced!');
       } else {
-        setStatusMessage('Email is not verified yet. Open the link in your inbox, then refresh again.');
+        setStatusMessage('Email is not verified yet. Open the link in your inbox, then click Refresh again.');
       }
     } catch (err) {
-      setError(mapAuthError(err).message);
+      setErrorDetails(mapAuthError(err, currentHostname));
+    } finally {
+      setRefreshingVerification(false);
     }
   };
 
@@ -226,10 +281,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     if (!user) return;
     const errMsg = validateUsernameInput(editUsername);
     if (errMsg) {
-      setError(errMsg);
+      setErrorDetails({ message: errMsg });
       return;
     }
-    setError('');
+    setErrorDetails(null);
     setStatusMessage('');
     setSavingProfile(true);
     try {
@@ -237,7 +292,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       onProfileUpdated(editUsername.trim());
       setStatusMessage('Minecraft username updated.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to update profile.');
+      setErrorDetails(mapAuthError(err, currentHostname));
     } finally {
       setSavingProfile(false);
     }
@@ -288,33 +343,55 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
               <div className="flex items-start gap-2.5">
                 <MailCheck className="w-4 h-4 text-amber-600 dark:text-amber-300 shrink-0 mt-0.5" />
-                <div className="text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
-                  Your account is signed in, but email verification is required before cloud profile sync is enabled.
+                <div className="text-xs text-amber-800 dark:text-amber-200 leading-relaxed space-y-1">
+                  <p className="font-semibold">Email Verification Pending</p>
+                  <p>
+                    Your account is created and signed in, but email verification is required before cloud sync, plugin reviews, and owner tools unlock.
+                  </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={handleRefreshVerification}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 st-btn-primary text-xs font-semibold cursor-pointer"
+                  disabled={refreshingVerification}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 st-btn-primary text-xs font-semibold cursor-pointer disabled:opacity-60"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>I&apos;ve verified — Refresh</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshingVerification ? 'animate-spin' : ''}`} />
+                  <span>{refreshingVerification ? 'Checking...' : "I've verified — Refresh"}</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleResendVerification}
-                  className="px-3 py-1.5 st-btn-secondary text-xs font-medium cursor-pointer"
+                  disabled={resendingVerification}
+                  className="px-3 py-1.5 st-btn-secondary text-xs font-medium cursor-pointer disabled:opacity-60"
                 >
-                  Resend email
+                  {resendingVerification ? 'Sending...' : 'Resend email'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSwitchToGoogleFromUnverified}
+                  disabled={googleSubmitting}
+                  className="px-3 py-1.5 st-btn-secondary text-xs font-medium cursor-pointer disabled:opacity-60"
+                >
+                  {googleSubmitting ? 'Opening Google...' : 'Use Google Sign-In instead'}
                 </button>
               </div>
             </div>
           )}
 
-          {error && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400">
-              {error}
+          {errorDetails && (
+            <div role="alert" className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 space-y-2">
+              <p>{errorDetails.message}</p>
+              {errorDetails.offerRedirectFallback && (
+                <button
+                  type="button"
+                  onClick={handleGoogleRedirectFallback}
+                  className="px-3 py-1.5 st-btn-secondary text-xs font-semibold cursor-pointer"
+                >
+                  Use Redirect Sign-In Instead
+                </button>
+              )}
             </div>
           )}
 
@@ -402,7 +479,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             aria-selected={mode === 'signin'}
             onClick={() => {
               setMode('signin');
-              setError('');
+              setErrorDetails(null);
               setStatusMessage('');
             }}
             className={`py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
@@ -419,7 +496,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             aria-selected={mode === 'signup'}
             onClick={() => {
               setMode('signup');
-              setError('');
+              setErrorDetails(null);
               setStatusMessage('');
             }}
             className={`py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
@@ -438,12 +515,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
             {mode === 'signin'
-              ? 'Access your saved tool presets, security settings, and style preferences.'
-              : 'Get started free — save configurations, sync themes, and vote on upcoming tools.'}
+              ? 'Access your saved tool presets, plugin reviews, and owner workspace.'
+              : 'Get started free — instant access with Google or create an email account.'}
           </p>
         </div>
 
-        {/* Google Auth Primary Button */}
+        {/* Google Auth Primary Button — opens popup directly on click without artificial captcha gates */}
         <button
           type="button"
           onClick={handleGoogleAuth}
@@ -472,7 +549,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               />
             </svg>
           )}
-          <span>{mode === 'signin' ? 'Sign in with Google' : 'Sign up with Google'}</span>
+          <span>
+            {googleSubmitting
+              ? 'Opening Google...'
+              : mode === 'signin'
+                ? 'Sign in with Google'
+                : 'Sign up with Google'}
+          </span>
         </button>
 
         <div className="relative flex items-center py-1">
@@ -483,18 +566,41 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           <div className="flex-grow border-t border-slate-200 dark:border-white/[0.08]" />
         </div>
 
-        {error && (
+        {errorDetails && (
           <div
             role="alert"
-            className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 leading-relaxed"
+            className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 leading-relaxed space-y-2.5"
           >
-            {error}
+            <p>{errorDetails.message}</p>
+            <div className="flex flex-wrap gap-2">
+              {errorDetails.offerRedirectFallback && (
+                <button
+                  type="button"
+                  onClick={handleGoogleRedirectFallback}
+                  disabled={googleSubmitting}
+                  className="px-3 py-1.5 st-btn-primary text-xs font-semibold cursor-pointer"
+                >
+                  Use Redirect Sign-In
+                </button>
+              )}
+              {errorDetails.suggestGoogle && (
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  disabled={googleSubmitting}
+                  className="px-3 py-1.5 st-btn-secondary text-xs font-semibold cursor-pointer"
+                >
+                  Continue with Google
+                </button>
+              )}
+            </div>
           </div>
         )}
 
         {statusMessage && (
-          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300 leading-relaxed">
-            {statusMessage}
+          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300 leading-relaxed flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{statusMessage}</span>
           </div>
         )}
 
@@ -539,12 +645,26 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="auth-password"
-              className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5"
-            >
-              Password
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label
+                htmlFor="auth-password"
+                className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
+                Password
+              </label>
+              {mode === 'signin' && (
+                <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  disabled={resetSending}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium hover:underline cursor-pointer disabled:opacity-60"
+                  style={{ color: 'var(--st-accent-text)' }}
+                >
+                  <KeyRound className="w-3 h-3" />
+                  <span>{resetSending ? 'Sending...' : 'Forgot password?'}</span>
+                </button>
+              )}
+            </div>
             <div className="relative">
               <input
                 id="auth-password"
@@ -588,12 +708,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             </div>
           )}
 
-          <HumanVerificationWidget
-            onVerified={setVerificationToken}
-            resetTrigger={verifyResetCounter}
-            label="Verify you are human"
-          />
-
           <button
             type="submit"
             disabled={submitting || googleSubmitting}
@@ -616,6 +730,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 type="button"
                 onClick={() => {
                   setMode('signup');
+                  setErrorDetails(null);
+                  setStatusMessage('');
                   onNavigate('/signup');
                 }}
                 className="font-semibold hover:underline cursor-pointer"
@@ -631,6 +747,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 type="button"
                 onClick={() => {
                   setMode('signin');
+                  setErrorDetails(null);
+                  setStatusMessage('');
                   onNavigate('/login');
                 }}
                 className="font-semibold hover:underline cursor-pointer"

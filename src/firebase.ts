@@ -19,6 +19,10 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+});
+
 
 export enum OperationType {
   CREATE = 'create',
@@ -91,6 +95,8 @@ export interface UserProfileRecord {
   preferredTheme: ThemeStyleId;
 }
 
+const inFlightProfiles = new Map<string, Promise<UserProfileRecord | null>>();
+
 export async function ensureUserProfile(
   firebaseUser: FirebaseUser,
   activeThemeId: ThemeStyleId,
@@ -100,69 +106,103 @@ export async function ensureUserProfile(
     return null;
   }
 
-  const userPath = `users/${firebaseUser.uid}`;
-  const privatePath = `users/${firebaseUser.uid}/private/info`;
-  const userRef = doc(db, 'users', firebaseUser.uid);
-
-  let existingSnap;
-  try {
-    existingSnap = await getDoc(userRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, userPath);
+  const existingPromise = inFlightProfiles.get(firebaseUser.uid);
+  if (existingPromise) {
+    return existingPromise;
   }
 
-  if (existingSnap.exists()) {
-    const data = existingSnap.data();
+  const work = (async (): Promise<UserProfileRecord | null> => {
+    const userPath = `users/${firebaseUser.uid}`;
+    const privatePath = `users/${firebaseUser.uid}/private/info`;
+    const userRef = doc(db, 'users', firebaseUser.uid);
+
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(userRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, userPath);
+    }
+
+    if (existingSnap.exists()) {
+      const data = existingSnap.data();
+      return {
+        uid: firebaseUser.uid,
+        username: typeof data.username === 'string' ? data.username : 'SurgePlayer',
+        plan:
+          data.plan === 'Plus' || data.plan === 'Pro' || data.plan === 'Business'
+            ? data.plan
+            : 'Free',
+        preferredTheme: isValidThemeId(String(data.preferredTheme))
+          ? (data.preferredTheme as ThemeStyleId)
+          : activeThemeId,
+      };
+    }
+
+    const cleanUsername = sanitizeUsername(
+      preferredUsername ||
+        firebaseUser.displayName ||
+        firebaseUser.email?.split('@')[0] ||
+        'SurgePlayer'
+    );
+    const safeTheme: ThemeStyleId = isValidThemeId(activeThemeId) ? activeThemeId : 'obsidian';
+    const cleanEmail = (firebaseUser.email || 'user@surgetrix.net').trim().slice(0, 160);
+
+    const batch = writeBatch(db);
+    batch.set(userRef, {
+      uid: firebaseUser.uid,
+      username: cleanUsername,
+      plan: 'Free',
+      preferredTheme: safeTheme,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'users', firebaseUser.uid, 'private', 'info'), {
+      uid: firebaseUser.uid,
+      email: cleanEmail,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      // If another tab or concurrent call created it just before us, read it back cleanly
+      try {
+        const retrySnap = await getDoc(userRef);
+        if (retrySnap.exists()) {
+          const data = retrySnap.data();
+          return {
+            uid: firebaseUser.uid,
+            username: typeof data.username === 'string' ? data.username : cleanUsername,
+            plan:
+              data.plan === 'Plus' || data.plan === 'Pro' || data.plan === 'Business'
+                ? data.plan
+                : 'Free',
+            preferredTheme: isValidThemeId(String(data.preferredTheme))
+              ? (data.preferredTheme as ThemeStyleId)
+              : safeTheme,
+          };
+        }
+      } catch {
+        // fall through to structured error handler
+      }
+      handleFirestoreError(error, OperationType.WRITE, `${userPath} & ${privatePath}`);
+    }
+
     return {
       uid: firebaseUser.uid,
-      username: typeof data.username === 'string' ? data.username : 'SurgePlayer',
-      plan:
-        data.plan === 'Plus' || data.plan === 'Pro' || data.plan === 'Business'
-          ? data.plan
-          : 'Free',
-      preferredTheme: isValidThemeId(String(data.preferredTheme))
-        ? (data.preferredTheme as ThemeStyleId)
-        : activeThemeId,
+      username: cleanUsername,
+      plan: 'Free',
+      preferredTheme: safeTheme,
     };
-  }
+  })();
 
-  const cleanUsername = sanitizeUsername(
-    preferredUsername ||
-      firebaseUser.displayName ||
-      firebaseUser.email?.split('@')[0] ||
-      'SurgePlayer'
-  );
-  const safeTheme: ThemeStyleId = isValidThemeId(activeThemeId) ? activeThemeId : 'obsidian';
-  const cleanEmail = (firebaseUser.email || 'user@surgetrix.net').trim().slice(0, 160);
-
-  const batch = writeBatch(db);
-  batch.set(userRef, {
-    uid: firebaseUser.uid,
-    username: cleanUsername,
-    plan: 'Free',
-    preferredTheme: safeTheme,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'users', firebaseUser.uid, 'private', 'info'), {
-    uid: firebaseUser.uid,
-    email: cleanEmail,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
+  inFlightProfiles.set(firebaseUser.uid, work);
   try {
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${userPath} & ${privatePath}`);
+    return await work;
+  } finally {
+    inFlightProfiles.delete(firebaseUser.uid);
   }
-
-  return {
-    uid: firebaseUser.uid,
-    username: cleanUsername,
-    plan: 'Free',
-    preferredTheme: safeTheme,
-  };
 }
 
 export async function updateUserProfileFields(
