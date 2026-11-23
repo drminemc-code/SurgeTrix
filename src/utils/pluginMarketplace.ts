@@ -28,6 +28,8 @@ export type PluginSortBy = 'downloads' | 'rating' | 'updated' | 'newest';
 
 export const MAX_PLUGIN_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 export const ALLOWED_PLUGIN_EXTENSIONS = ['.jar', '.zip'] as const;
+export const MAX_PLUGIN_ICON_URL_CHARS = 512;
+export const MAX_PLUGIN_ICON_DATA_CHARS = 65536;
 
 export interface PluginVersionRecord {
   id: string;
@@ -77,6 +79,7 @@ export interface PluginListing {
   fileSize: number;
   sha256: string;
   supportUrl: string;
+  iconUrl?: string;
   downloads: number;
   ratingAverage: number;
   reviewsCount: number;
@@ -144,6 +147,52 @@ export function validatePluginFileMeta(
   return { ok: true, extension: ext, safeName };
 }
 
+export function validatePluginIconUrl(
+  raw: unknown
+): { ok: true; iconUrl: string } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) {
+    return { ok: true, iconUrl: '' };
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, error: 'Plugin icon must be an image URL or uploaded PNG/JPG/WebP icon.' };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: true, iconUrl: '' };
+  }
+  if (trimmed.toLowerCase().startsWith('data:')) {
+    if (trimmed.length > MAX_PLUGIN_ICON_DATA_CHARS) {
+      return {
+        ok: false,
+        error: 'Uploaded plugin icon exceeds the 64 KB limit. Try a smaller PNG, JPG, or WebP image.',
+      };
+    }
+    if (!/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+      return {
+        ok: false,
+        error: 'Plugin icon uploads support raster PNG, JPG, WebP, or GIF images only.',
+      };
+    }
+    return { ok: true, iconUrl: trimmed };
+  }
+
+  if (trimmed.length > MAX_PLUGIN_ICON_URL_CHARS) {
+    return { ok: false, error: 'Plugin icon URL cannot exceed 512 characters.' };
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { ok: false, error: 'Plugin icon URL must start with https:// or http://.' };
+    }
+    if (/\s/.test(trimmed)) {
+      return { ok: false, error: 'Plugin icon URL cannot contain spaces.' };
+    }
+  } catch {
+    return { ok: false, error: 'Plugin icon URL must be a valid https:// or http:// image address.' };
+  }
+  return { ok: true, iconUrl: trimmed };
+}
+
 export function validatePluginPayload(input: {
   name?: unknown;
   tagline?: unknown;
@@ -154,6 +203,7 @@ export function validatePluginPayload(input: {
   mcVersions?: unknown;
   priceLabel?: unknown;
   supportUrl?: unknown;
+  iconUrl?: unknown;
 }):
   | {
       ok: true;
@@ -167,6 +217,7 @@ export function validatePluginPayload(input: {
         mcVersions: string[];
         priceLabel: string;
         supportUrl: string;
+        iconUrl: string;
       };
     }
   | { ok: false; error: string } {
@@ -227,6 +278,11 @@ export function validatePluginPayload(input: {
     supportUrl = candidate;
   }
 
+  const iconCheck = validatePluginIconUrl(input.iconUrl);
+  if (!iconCheck.ok) {
+    return { ok: false, error: iconCheck.error };
+  }
+
   return {
     ok: true,
     data: {
@@ -239,6 +295,7 @@ export function validatePluginPayload(input: {
       mcVersions,
       priceLabel,
       supportUrl,
+      iconUrl: iconCheck.iconUrl,
     },
   };
 }

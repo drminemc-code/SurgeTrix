@@ -22,7 +22,6 @@ import {
   OWNER_EMAIL,
   PLUGIN_CATEGORIES,
   PLUGIN_PLATFORMS,
-  PluginCategory,
   PluginListing,
   PluginSortBy,
   computeRatingBreakdown,
@@ -38,6 +37,8 @@ import {
   submitPluginReviewClient,
 } from '../utils/pluginClient';
 import { AuthUserState } from './AuthPage';
+import { BuiltByBitResourceForm, BuiltByBitResourceValues } from './BuiltByBitResourceForm';
+import { PluginLogo } from './PluginLogo';
 
 interface PluginsPageProps {
   user: AuthUserState | null;
@@ -103,17 +104,22 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
 
   // Community plugin submission state (pending Owner approval)
   const [showSubmitForm, setShowSubmitForm] = useState(false);
-  const [subName, setSubName] = useState('');
-  const [subVersion, setSubVersion] = useState('1.0.0');
-  const [subCategory, setSubCategory] = useState<PluginCategory>('Administration');
-  const [subPrice, setSubPrice] = useState('Free');
-  const [subTagline, setSubTagline] = useState('');
-  const [subDescription, setSubDescription] = useState('');
-  const [subMcVersions, setSubMcVersions] = useState('1.21.4');
-  const [subPlatforms, setSubPlatforms] = useState<string[]>(['Paper', 'Purpur']);
-  const [subSupportUrl, setSubSupportUrl] = useState('');
-  const [subChangelog, setSubChangelog] = useState('Initial community submission for review.');
-  const [subFile, setSubFile] = useState<File | null>(null);
+  const [subValues, setSubValues] = useState<BuiltByBitResourceValues>({
+    name: '',
+    version: '1.0.0',
+    category: 'Administration',
+    priceLabel: 'Free',
+    tagline: '',
+    description: '',
+    mcVersions: '1.21.4',
+    platforms: ['Paper', 'Purpur'],
+    supportUrl: '',
+    iconUrl: '',
+    releaseTitle: '',
+    changelog: 'Initial community submission for review.',
+    featured: false,
+    file: null,
+  });
   const [subSubmitting, setSubSubmitting] = useState(false);
   const [subError, setSubError] = useState('');
   const [subSuccess, setSubSuccess] = useState('');
@@ -198,48 +204,60 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
     }
   };
 
-  const handleToggleSubPlatform = (plat: string) => {
-    setSubPlatforms((prev) =>
-      prev.includes(plat) ? (prev.length > 1 ? prev.filter((p) => p !== plat) : prev) : [...prev, plat]
-    );
+  const patchSubValues = (patch: Partial<BuiltByBitResourceValues>) => {
+    setSubValues((prev) => ({ ...prev, ...patch }));
   };
 
   const handleSubmitPluginForReview = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubError('');
     setSubSuccess('');
-    if (!subFile) {
+    if (!subValues.file) {
       setSubError('Select a .jar or .zip archive to submit for Owner approval.');
       return;
     }
     setSubSubmitting(true);
     try {
+      const submittedName = subValues.name.trim();
       const result = await submitPluginForReviewClient({
-        name: subName.trim(),
-        version: subVersion.trim(),
-        category: subCategory,
-        priceLabel: subPrice.trim() || 'Free',
-        tagline: subTagline.trim(),
-        description: subDescription.trim(),
-        mcVersions: subMcVersions,
-        platforms: subPlatforms,
-        supportUrl: subSupportUrl.trim(),
-        releaseTitle: `Submission v${subVersion.trim() || '1.0.0'}`,
-        changelog: subChangelog.trim(),
-        file: subFile,
+        name: submittedName,
+        version: subValues.version.trim(),
+        category: subValues.category,
+        priceLabel: subValues.priceLabel.trim() || 'Free',
+        tagline: subValues.tagline.trim(),
+        description: subValues.description.trim(),
+        mcVersions: subValues.mcVersions,
+        platforms: subValues.platforms,
+        supportUrl: subValues.supportUrl.trim(),
+        iconUrl: subValues.iconUrl.trim(),
+        releaseTitle:
+          subValues.releaseTitle.trim() || `Submission v${subValues.version.trim() || '1.0.0'}`,
+        changelog: subValues.changelog.trim(),
+        file: subValues.file,
       });
       if (!result.ok) {
         setSubError(result.error);
         return;
       }
       setSubSuccess(
-        `Submitted "${subName.trim()}" for review. It will appear publicly once approved by Owner (${OWNER_EMAIL}).`
+        `Submitted "${submittedName}" for review. It will appear publicly once approved by Owner (${OWNER_EMAIL}).`
       );
-      setSubName('');
-      setSubTagline('');
-      setSubDescription('');
-      setSubSupportUrl('');
-      setSubFile(null);
+      setSubValues({
+        name: '',
+        version: '1.0.0',
+        category: 'Administration',
+        priceLabel: 'Free',
+        tagline: '',
+        description: '',
+        mcVersions: '1.21.4',
+        platforms: ['Paper', 'Purpur'],
+        supportUrl: '',
+        iconUrl: '',
+        releaseTitle: '',
+        changelog: 'Initial community submission for review.',
+        featured: false,
+        file: null,
+      });
       if (isOwner) {
         await onRefreshPlugins();
       }
@@ -332,16 +350,11 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
         {/* BuiltByBit Header Card */}
         <div className="st-card p-6 flex flex-col md:flex-row md:items-center justify-between gap-5">
           <div className="flex items-start gap-4">
-            <div
-              className="w-16 h-16 rounded-xl flex items-center justify-center text-xl font-bold shrink-0"
-              style={{
-                backgroundColor: 'var(--st-accent-soft)',
-                color: 'var(--st-accent-text)',
-                border: '1px solid var(--st-border-strong)',
-              }}
-            >
-              {selectedPlugin.name.slice(0, 2).toUpperCase()}
-            </div>
+            <PluginLogo
+              name={selectedPlugin.name}
+              iconUrl={selectedPlugin.iconUrl}
+              size="xl"
+            />
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl sm:text-3xl font-bold" style={{ color: 'var(--st-text)' }}>
@@ -982,23 +995,17 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
       </div>
 
       {showSubmitForm && !isOwner && (
-        <div className="st-card p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
-                Submit Plugin for Owner Review
-              </h2>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--st-text-muted)' }}>
-                Submissions enter the Owner Dashboard queue ({OWNER_EMAIL}) and go live after approval.
-              </p>
-            </div>
-          </div>
-
+        <div className="space-y-4">
           {!user ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <p className="text-xs" style={{ color: 'var(--st-text-muted)' }}>
-                Sign in with a verified SurgeTrix account to submit a .jar or .zip plugin for approval.
-              </p>
+            <div className="st-card p-6 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
+                  Submit Plugin for Owner Review
+                </h2>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--st-text-muted)' }}>
+                  Sign in with a verified SurgeTrix account to upload a plugin logo, resource details, and .jar or .zip archive.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => onNavigate('/login')}
@@ -1008,10 +1015,15 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
               </button>
             </div>
           ) : !user.emailVerified ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <p className="text-xs text-amber-400">
-                Verify your email address before submitting a plugin for Owner review.
-              </p>
+            <div className="st-card p-6 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
+                  Submit Plugin for Owner Review
+                </h2>
+                <p className="text-xs text-amber-400 mt-0.5">
+                  Verify your email address before submitting a plugin for Owner review.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => onNavigate('/login')}
@@ -1021,147 +1033,16 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
               </button>
             </div>
           ) : (
-            <form onSubmit={(e) => void handleSubmitPluginForReview(e)} className="space-y-4">
-              {subError && (
-                <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-500">
-                  {subError}
-                </div>
-              )}
-              {subSuccess && (
-                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-500 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{subSuccess}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <input
-                  type="text"
-                  required
-                  value={subName}
-                  onChange={(e) => setSubName(e.target.value)}
-                  placeholder="Plugin Name"
-                  className="sm:col-span-2 px-3 py-2 st-surface-inset text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                />
-                <input
-                  type="text"
-                  required
-                  value={subVersion}
-                  onChange={(e) => setSubVersion(e.target.value)}
-                  placeholder="Version (1.0.0)"
-                  className="px-3 py-2 st-surface-inset font-mono text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                />
-                <select
-                  value={subCategory}
-                  onChange={(e) => setSubCategory(e.target.value as PluginCategory)}
-                  className="px-3 py-2 st-surface-inset text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                >
-                  {PLUGIN_CATEGORIES.filter((c) => c !== 'All Categories').map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  required
-                  value={subTagline}
-                  onChange={(e) => setSubTagline(e.target.value)}
-                  placeholder="Short one-line summary"
-                  className="sm:col-span-2 px-3 py-2 st-surface-inset text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                />
-                <input
-                  type="text"
-                  value={subMcVersions}
-                  onChange={(e) => setSubMcVersions(e.target.value)}
-                  placeholder="MC Versions (1.20.4, 1.21.4)"
-                  className="px-3 py-2 st-surface-inset font-mono text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                />
-                <input
-                  type="text"
-                  value={subPrice}
-                  onChange={(e) => setSubPrice(e.target.value)}
-                  placeholder="Price (Free)"
-                  className="px-3 py-2 st-surface-inset text-sm"
-                  style={{ color: 'var(--st-text)' }}
-                />
-              </div>
-
-              <div className="flex flex-wrap gap-1.5">
-                {PLUGIN_PLATFORMS.map((plat) => {
-                  const active = subPlatforms.includes(plat);
-                  return (
-                    <button
-                      key={plat}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => handleToggleSubPlatform(plat)}
-                      className="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer"
-                      style={{
-                        backgroundColor: active ? 'var(--st-accent-soft)' : 'var(--st-surface-inset)',
-                        border: active ? '1px solid var(--st-border-strong)' : '1px solid var(--st-border)',
-                        color: active ? 'var(--st-accent-text)' : 'var(--st-text-muted)',
-                      }}
-                    >
-                      {plat}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <textarea
-                rows={3}
-                required
-                value={subDescription}
-                onChange={(e) => setSubDescription(e.target.value)}
-                placeholder="Describe features, commands, permissions, and installation instructions..."
-                className="w-full p-3 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="url"
-                  value={subSupportUrl}
-                  onChange={(e) => setSubSupportUrl(e.target.value)}
-                  placeholder="Support / Docs URL (optional)"
-                  className="px-3 py-2 st-surface-inset text-xs"
-                  style={{ color: 'var(--st-text)' }}
-                />
-                <input
-                  type="text"
-                  value={subChangelog}
-                  onChange={(e) => setSubChangelog(e.target.value)}
-                  placeholder="Submission notes"
-                  className="px-3 py-2 st-surface-inset text-xs"
-                  style={{ color: 'var(--st-text)' }}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <input
-                  type="file"
-                  accept=".jar,.zip"
-                  required
-                  onChange={(e) => setSubFile(e.target.files?.[0] || null)}
-                  className="text-xs"
-                  style={{ color: 'var(--st-text-secondary)' }}
-                />
-                <button
-                  type="submit"
-                  disabled={subSubmitting}
-                  className="inline-flex items-center gap-2 px-4 py-2 st-btn-primary text-xs font-semibold cursor-pointer disabled:opacity-60"
-                >
-                  {subSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                  <span>{subSubmitting ? 'Submitting…' : 'Submit for Approval'}</span>
-                </button>
-              </div>
-            </form>
+            <BuiltByBitResourceForm
+              mode="submit"
+              authorDisplayName={user.username}
+              values={subValues}
+              onChange={patchSubValues}
+              onSubmit={(e) => void handleSubmitPluginForReview(e)}
+              submitting={subSubmitting}
+              error={subError}
+              success={subSuccess}
+            />
           )}
         </div>
       )}
@@ -1352,16 +1233,7 @@ export const PluginsPage: React.FC<PluginsPageProps> = ({
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3 min-w-0">
-                    <div
-                      className="w-11 h-11 rounded-lg flex items-center justify-center text-sm font-bold shrink-0"
-                      style={{
-                        backgroundColor: 'var(--st-accent-soft)',
-                        color: 'var(--st-accent-text)',
-                        border: '1px solid var(--st-border-strong)',
-                      }}
-                    >
-                      {pl.name.slice(0, 2).toUpperCase()}
-                    </div>
+                    <PluginLogo name={pl.name} iconUrl={pl.iconUrl} size="md" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <button

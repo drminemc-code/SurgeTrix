@@ -9,6 +9,7 @@ import {
   isOwnerUser,
   sanitizeDownloadFilename,
   validatePluginFileMeta,
+  validatePluginIconUrl,
   validatePluginPayload,
   validateReviewPayload,
 } from './pluginMarketplace.ts';
@@ -43,6 +44,26 @@ test('validatePluginFileMeta enforces .jar/.zip, size bounds, and ZIP magic byte
   assert.equal(sanitizeDownloadFilename('../..//bad;name?.zip'), 'bad-name-.zip');
 });
 
+test('validatePluginIconUrl accepts safe raster data URIs and http(s) URLs while blocking SVG/XSS', () => {
+  assert.deepEqual(validatePluginIconUrl(''), { ok: true, iconUrl: '' });
+  assert.deepEqual(validatePluginIconUrl(undefined), { ok: true, iconUrl: '' });
+
+  const httpsOk = validatePluginIconUrl('https://cdn.surgetrix.net/icons/surgeguard.png');
+  assert.equal(httpsOk.ok, true);
+
+  const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  assert.deepEqual(validatePluginIconUrl(pngData), { ok: true, iconUrl: pngData });
+
+  const svgBlocked = validatePluginIconUrl('data:image/svg+xml;base64,PHN2Zy8+');
+  assert.equal(svgBlocked.ok, false);
+
+  const jsBlocked = validatePluginIconUrl('javascript:alert(1)');
+  assert.equal(jsBlocked.ok, false);
+
+  const oversized = validatePluginIconUrl(`data:image/webp;base64,${'A'.repeat(70000)}`);
+  assert.equal(oversized.ok, false);
+});
+
 test('validatePluginPayload validates required plugin fields cleanly', () => {
   const valid = validatePluginPayload({
     name: 'SurgeGuard AC',
@@ -54,11 +75,13 @@ test('validatePluginPayload validates required plugin fields cleanly', () => {
     mcVersions: '1.20.4, 1.21.4',
     priceLabel: 'Free',
     supportUrl: 'https://discord.gg/surgetrix',
+    iconUrl: 'https://cdn.surgetrix.net/icons/surgeguard.png',
   });
   assert.equal(valid.ok, true);
   if (valid.ok) {
     assert.deepEqual(valid.data.mcVersions, ['1.20.4', '1.21.4']);
     assert.deepEqual(valid.data.platforms, ['Paper', 'Folia']);
+    assert.equal(valid.data.iconUrl, 'https://cdn.surgetrix.net/icons/surgeguard.png');
   }
 
   const badUrl = validatePluginPayload({
@@ -71,6 +94,17 @@ test('validatePluginPayload validates required plugin fields cleanly', () => {
     supportUrl: 'javascript:alert(1)',
   });
   assert.equal(badUrl.ok, false);
+
+  const badIcon = validatePluginPayload({
+    name: 'SurgeGuard AC',
+    tagline: 'Lightweight movement protection for Paper.',
+    description: 'Valid description over ten chars.',
+    category: 'Anti-Cheat',
+    version: '1.0.0',
+    platforms: ['Paper'],
+    iconUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+  });
+  assert.equal(badIcon.ok, false);
 });
 
 test('computeRatingBreakdown and validateReviewPayload compute BuiltByBit stats accurately', () => {

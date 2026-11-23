@@ -172,4 +172,6 @@ test('firestore.rules restricts /plugins approval to verified drminemc@gmail.com
   assert.match(rulesText, /match \/reviews\/\{reviewId\}/);
   assert.match(rulesText, /match \/community_requests\/\{requestId\}/);
   assert.match(rulesText, /exists\(\/databases\/\$\(database\)\/documents\/plugins\/\$\(pluginId\)\)/);
+  assert.match(rulesText, /data\.iconUrl\.size\(\) <= 65536/);
+  assert.match(rulesText, /'iconUrl'/);
 });

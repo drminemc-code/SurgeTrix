@@ -21,6 +21,7 @@ import {
   sanitizeDownloadFilename,
   slugifyPluginId,
   validatePluginFileMeta,
+  validatePluginIconUrl,
   validatePluginPayload,
   validateReviewPayload,
 } from './pluginMarketplace';
@@ -154,6 +155,7 @@ async function hydrateFirestorePluginDoc(
     fileSize: Number(d.fileSize || 0),
     sha256: String(d.sha256 || ''),
     supportUrl: String(d.supportUrl || ''),
+    iconUrl: typeof d.iconUrl === 'string' ? d.iconUrl : '',
     downloads: Number(d.downloads || 0),
     ratingAverage: stats.average,
     reviewsCount: stats.count,
@@ -202,6 +204,7 @@ export interface CreatePluginInput {
   mcVersions: string;
   platforms: string[];
   supportUrl: string;
+  iconUrl?: string;
   releaseTitle: string;
   changelog: string;
   featured: boolean;
@@ -221,6 +224,7 @@ export async function createAndPublishPluginClient(
     mcVersions: input.mcVersions,
     priceLabel: input.priceLabel || 'Free',
     supportUrl: input.supportUrl,
+    iconUrl: input.iconUrl,
   });
   if (!validated.ok) {
     return { ok: false, error: validated.error };
@@ -256,6 +260,7 @@ export async function createAndPublishPluginClient(
       mcVersions: validated.data.mcVersions,
       platforms: validated.data.platforms,
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       releaseTitle: input.releaseTitle.trim() || `Initial Release v${validated.data.version}`,
       changelog: input.changelog.trim() || 'Initial verified release.',
       featured: input.featured,
@@ -364,6 +369,7 @@ export async function createAndPublishPluginClient(
       fileSize: bytes.length,
       sha256,
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       versionsJson: JSON.stringify([initialVersion]),
       ownerUid: currentUser.uid,
       status: 'hidden',
@@ -422,6 +428,7 @@ export async function submitPluginForReviewClient(
     mcVersions: input.mcVersions,
     priceLabel: input.priceLabel || 'Free',
     supportUrl: input.supportUrl,
+    iconUrl: input.iconUrl,
   });
   if (!validated.ok) {
     return { ok: false, error: validated.error };
@@ -455,6 +462,7 @@ export async function submitPluginForReviewClient(
       mcVersions: validated.data.mcVersions,
       platforms: validated.data.platforms,
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       releaseTitle: input.releaseTitle.trim() || `Submission v${validated.data.version}`,
       changelog: input.changelog.trim() || 'Community plugin submission awaiting Owner approval.',
     }),
@@ -559,6 +567,7 @@ export async function submitPluginForReviewClient(
       fileSize: bytes.length,
       sha256,
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       versionsJson: JSON.stringify([initialVersion]),
       ownerUid: currentUser.uid,
       status: 'pending',
@@ -616,17 +625,27 @@ export async function updatePluginMetadataClient(
     priceLabel?: string;
     mcVersions?: string | string[];
     supportUrl?: string;
+    iconUrl?: string;
     featured?: boolean;
     status?: 'published' | 'pending' | 'hidden';
   }
 ): Promise<{ ok: true; plugin: PluginListing } | { ok: false; error: string }> {
+  let normalizedPatch = patch;
+  if (patch.iconUrl !== undefined) {
+    const iconCheck = validatePluginIconUrl(patch.iconUrl);
+    if (!iconCheck.ok) {
+      return { ok: false, error: iconCheck.error };
+    }
+    normalizedPatch = { ...patch, iconUrl: iconCheck.iconUrl };
+  }
+
   const headers = await getFirebaseAuthHeaders(true);
   const apiAttempt = await attemptJsonApi<{ ok: boolean; plugin: PluginListing }>(
     `/api/plugins/${encodeURIComponent(plugin.id)}`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify(patch),
+      body: JSON.stringify(normalizedPatch),
     }
   );
   if (apiAttempt.kind === 'ok') {
@@ -642,23 +661,24 @@ export async function updatePluginMetadataClient(
       updatedAtIso: nowIso,
       updatedAt: serverTimestamp(),
     };
-    if (patch.name !== undefined) updateFields.name = patch.name.trim().slice(0, 64);
-    if (patch.tagline !== undefined) updateFields.tagline = patch.tagline.trim().slice(0, 160);
-    if (patch.description !== undefined) updateFields.description = patch.description.trim().slice(0, 10000);
-    if (patch.category !== undefined) updateFields.category = patch.category;
-    if (patch.priceLabel !== undefined) updateFields.priceLabel = patch.priceLabel.trim().slice(0, 24) || 'Free';
-    if (patch.mcVersions !== undefined) {
-      const list = Array.isArray(patch.mcVersions)
-        ? patch.mcVersions
-        : patch.mcVersions
+    if (normalizedPatch.name !== undefined) updateFields.name = normalizedPatch.name.trim().slice(0, 64);
+    if (normalizedPatch.tagline !== undefined) updateFields.tagline = normalizedPatch.tagline.trim().slice(0, 160);
+    if (normalizedPatch.description !== undefined) updateFields.description = normalizedPatch.description.trim().slice(0, 10000);
+    if (normalizedPatch.category !== undefined) updateFields.category = normalizedPatch.category;
+    if (normalizedPatch.priceLabel !== undefined) updateFields.priceLabel = normalizedPatch.priceLabel.trim().slice(0, 24) || 'Free';
+    if (normalizedPatch.mcVersions !== undefined) {
+      const list = Array.isArray(normalizedPatch.mcVersions)
+        ? normalizedPatch.mcVersions
+        : normalizedPatch.mcVersions
             .split(',')
             .map((v) => v.trim())
             .filter(Boolean);
       updateFields.mcVersions = list.length > 0 ? list.slice(0, 12) : plugin.mcVersions;
     }
-    if (patch.supportUrl !== undefined) updateFields.supportUrl = patch.supportUrl.trim().slice(0, 256);
-    if (patch.featured !== undefined) updateFields.featured = Boolean(patch.featured);
-    if (patch.status !== undefined) updateFields.status = patch.status;
+    if (normalizedPatch.supportUrl !== undefined) updateFields.supportUrl = normalizedPatch.supportUrl.trim().slice(0, 256);
+    if (normalizedPatch.iconUrl !== undefined) updateFields.iconUrl = normalizedPatch.iconUrl;
+    if (normalizedPatch.featured !== undefined) updateFields.featured = Boolean(normalizedPatch.featured);
+    if (normalizedPatch.status !== undefined) updateFields.status = normalizedPatch.status;
 
     const ref = doc(db, 'plugins', plugin.id);
     await updateDoc(ref, updateFields);

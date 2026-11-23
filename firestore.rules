@@ -228,6 +228,15 @@ service cloud.firestore {
         && data.sha256.size() <= 128
         && data.supportUrl is string
         && data.supportUrl.size() <= 256
+        && (!('iconUrl' in data) || (
+          data.iconUrl is string
+          && data.iconUrl.size() <= 65536
+          && (
+            data.iconUrl == '' ||
+            data.iconUrl.matches('^https?://.*') ||
+            data.iconUrl.matches('^data:image/(png|jpeg|jpg|webp|gif);base64,.*')
+          )
+        ))
         && data.versionsJson is string
         && data.versionsJson.size() >= 2
         && data.versionsJson.size() <= 50000
@@ -339,7 +348,7 @@ service cloud.firestore {
 
       allow create: if isValidId(pluginId)
         && incoming().keys().hasAll(['id', 'slug', 'name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'authorName', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'ownerUid', 'status', 'downloads', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'slug', 'name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'authorName', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'ownerUid', 'status', 'downloads', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'slug', 'name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'authorName', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'iconUrl', 'versionsJson', 'ownerUid', 'status', 'downloads', 'createdAtIso', 'updatedAtIso', 'createdAt', 'updatedAt'])
         && isValidPluginDoc(incoming(), pluginId)
         && incoming().ownerUid == request.auth.uid
         && incoming().downloads == 0
@@ -359,7 +368,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().createdAtIso == existing().createdAtIso
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'versionsJson', 'status', 'downloads', 'updatedAtIso', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'description', 'category', 'platforms', 'mcVersions', 'priceLabel', 'featured', 'currentVersion', 'fileName', 'fileSize', 'sha256', 'supportUrl', 'iconUrl', 'versionsJson', 'status', 'downloads', 'updatedAtIso', 'updatedAt']);
 
       allow delete: if isValidId(pluginId) && isVerifiedPlatformOwner();
 

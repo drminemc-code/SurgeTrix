@@ -7,6 +7,7 @@ import {
   EyeOff,
   FileArchive,
   Globe,
+  ImagePlus,
   Loader2,
   Lock,
   Plus,
@@ -22,11 +23,13 @@ import { CommunityRequest, ResourceItem, ServerListing } from '../data/catalog';
 import {
   OWNER_EMAIL,
   PLUGIN_CATEGORIES,
-  PLUGIN_PLATFORMS,
   PluginCategory,
   PluginListing,
   formatBytes,
 } from '../utils/pluginMarketplace';
+import { processPluginIconFile } from '../utils/pluginIconProcessor';
+import { BuiltByBitResourceForm, BuiltByBitResourceValues } from './BuiltByBitResourceForm';
+import { PluginLogo } from './PluginLogo';
 import {
   createAndPublishPluginClient,
   deleteOwnerDomainClient,
@@ -71,6 +74,23 @@ interface OwnerDashboardProps {
 type DashboardTab = 'approvals' | 'moderation' | 'plugins' | 'upload';
 type ModerationFilter = 'all' | 'requests' | 'reviews' | 'servers' | 'domains' | 'resources';
 
+const INITIAL_OWNER_UPLOAD: BuiltByBitResourceValues = {
+  name: '',
+  version: '1.0.0',
+  category: 'Administration',
+  priceLabel: 'Free',
+  tagline: '',
+  description: '',
+  mcVersions: '1.20.4, 1.21.1, 1.21.4',
+  platforms: ['Paper', 'Purpur'],
+  supportUrl: '',
+  iconUrl: '',
+  releaseTitle: '',
+  changelog: 'Initial verified release.',
+  featured: false,
+  file: null,
+};
+
 export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   user,
   plugins,
@@ -93,20 +113,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const [moderationFilter, setModerationFilter] = useState<ModerationFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Upload new plugin state
-  const [name, setName] = useState('');
-  const [version, setVersion] = useState('1.0.0');
-  const [category, setCategory] = useState<PluginCategory>('Administration');
-  const [priceLabel, setPriceLabel] = useState('Free');
-  const [tagline, setTagline] = useState('');
-  const [description, setDescription] = useState('');
-  const [mcVersions, setMcVersions] = useState('1.20.4, 1.21.1, 1.21.4');
-  const [platforms, setPlatforms] = useState<string[]>(['Paper', 'Purpur']);
-  const [supportUrl, setSupportUrl] = useState('');
-  const [releaseTitle, setReleaseTitle] = useState('');
-  const [changelog, setChangelog] = useState('Initial verified release.');
-  const [featured, setFeatured] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // BuiltByBit-style upload state
+  const [uploadValues, setUploadValues] = useState<BuiltByBitResourceValues>(INITIAL_OWNER_UPLOAD);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState('');
@@ -120,6 +128,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   const [editPrice, setEditPrice] = useState('Free');
   const [editMcVersions, setEditMcVersions] = useState('');
   const [editSupportUrl, setEditSupportUrl] = useState('');
+  const [editIconUrl, setEditIconUrl] = useState('');
 
   const [updatePluginId, setUpdatePluginId] = useState<string | null>(null);
   const [nextVersion, setNextVersion] = useState('');
@@ -245,10 +254,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
   const totalDownloads = plugins.reduce((acc, p) => acc + p.downloads, 0);
 
-  const togglePlatform = (plat: string) => {
-    setPlatforms((prev) =>
-      prev.includes(plat) ? (prev.length > 1 ? prev.filter((p) => p !== plat) : prev) : [...prev, plat]
-    );
+  const patchUploadValues = (patch: Partial<BuiltByBitResourceValues>) => {
+    setUploadValues((prev) => ({ ...prev, ...patch }));
   };
 
   const handleSetPluginStatus = async (
@@ -326,6 +333,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
         priceLabel: editPrice.trim() || 'Free',
         mcVersions: editMcVersions,
         supportUrl: editSupportUrl.trim(),
+        iconUrl: editIconUrl.trim(),
       });
       if (!result.ok) {
         setPanelErr(result.error);
@@ -337,6 +345,17 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
     } finally {
       setActionBusyId(null);
     }
+  };
+
+  const handleEditIconUpload = async (file: File | null) => {
+    if (!file) return;
+    setPanelErr('');
+    const processed = await processPluginIconFile(file);
+    if (!processed.ok) {
+      setPanelErr(processed.error);
+      return;
+    }
+    setEditIconUrl(processed.dataUrl);
   };
 
   const handlePushVersionUpdate = async (e: React.FormEvent) => {
@@ -377,11 +396,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
     setUploadError('');
     setUploadSuccess('');
 
-    if (!selectedFile) {
+    if (!uploadValues.file) {
       setUploadError('Select a .jar or .zip plugin file to upload.');
       return;
     }
-    const lowerFile = selectedFile.name.toLowerCase();
+    const lowerFile = uploadValues.file.name.toLowerCase();
     if (!lowerFile.endsWith('.jar') && !lowerFile.endsWith('.zip')) {
       setUploadError('Only .jar and .zip plugin archive files are allowed.');
       return;
@@ -389,20 +408,23 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
     setUploading(true);
     try {
+      const publishedName = uploadValues.name.trim();
+      const publishedFileName = uploadValues.file.name;
       const result = await createAndPublishPluginClient({
-        name: name.trim(),
-        version: version.trim(),
-        category,
-        priceLabel: priceLabel.trim() || 'Free',
-        tagline: tagline.trim(),
-        description: description.trim(),
-        mcVersions,
-        platforms,
-        supportUrl: supportUrl.trim(),
-        releaseTitle: releaseTitle.trim(),
-        changelog: changelog.trim(),
-        featured,
-        file: selectedFile,
+        name: publishedName,
+        version: uploadValues.version.trim(),
+        category: uploadValues.category,
+        priceLabel: uploadValues.priceLabel.trim() || 'Free',
+        tagline: uploadValues.tagline.trim(),
+        description: uploadValues.description.trim(),
+        mcVersions: uploadValues.mcVersions,
+        platforms: uploadValues.platforms,
+        supportUrl: uploadValues.supportUrl.trim(),
+        iconUrl: uploadValues.iconUrl.trim(),
+        releaseTitle: uploadValues.releaseTitle.trim(),
+        changelog: uploadValues.changelog.trim(),
+        featured: uploadValues.featured,
+        file: uploadValues.file,
       });
 
       if (!result.ok) {
@@ -411,14 +433,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
       }
 
       await onRefreshPlugins();
-      setUploadSuccess(`Uploaded & published "${name.trim()}" (${selectedFile.name}).`);
-      setName('');
-      setTagline('');
-      setDescription('');
-      setSupportUrl('');
-      setReleaseTitle('');
-      setSelectedFile(null);
-      setFeatured(false);
+      setUploadSuccess(`Uploaded & published "${publishedName}" (${publishedFileName}).`);
+      setUploadValues(INITIAL_OWNER_UPLOAD);
     } catch (err) {
       setUploadError(
         err instanceof Error ? err.message : 'Unexpected error while uploading plugin.'
@@ -627,29 +643,32 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 return (
                   <div key={pl.id} className="st-card p-5 space-y-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1 min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
-                            {pl.name}
-                          </span>
-                          <span className="font-mono" style={{ color: 'var(--st-success)' }}>
-                            v{pl.currentVersion}
-                          </span>
-                          <span className="text-amber-400 font-semibold">Pending Approval</span>
-                          {flagged && (
-                            <span className="text-rose-400 font-semibold">
-                              · External Link / Keyword Flag
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <PluginLogo name={pl.name} iconUrl={pl.iconUrl} size="md" />
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
+                              {pl.name}
                             </span>
-                          )}
-                        </div>
-                        <div className="text-xs tabular-nums" style={{ color: 'var(--st-text-muted)' }}>
-                          Submitted by <strong style={{ color: 'var(--st-text-secondary)' }}>{pl.authorName}</strong>
-                          {' · '}
-                          {pl.category}
-                          {' · '}
-                          {pl.platforms.join(', ')}
-                          {' · '}
-                          {pl.fileName || 'No file'} ({formatBytes(pl.fileSize)})
+                            <span className="font-mono" style={{ color: 'var(--st-success)' }}>
+                              v{pl.currentVersion}
+                            </span>
+                            <span className="text-amber-400 font-semibold">Pending Approval</span>
+                            {flagged && (
+                              <span className="text-rose-400 font-semibold">
+                                · External Link / Keyword Flag
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs tabular-nums" style={{ color: 'var(--st-text-muted)' }}>
+                            Submitted by <strong style={{ color: 'var(--st-text-secondary)' }}>{pl.authorName}</strong>
+                            {' · '}
+                            {pl.category}
+                            {' · '}
+                            {pl.platforms.join(', ')}
+                            {' · '}
+                            {pl.fileName || 'No file'} ({formatBytes(pl.fileSize)})
+                          </div>
                         </div>
                       </div>
 
@@ -710,15 +729,18 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
               <div className="divide-y" style={{ borderColor: 'var(--st-border)' }}>
                 {hiddenDraftPlugins.map((pl) => (
                   <div key={pl.id} className="py-3 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold" style={{ color: 'var(--st-text)' }}>
-                        {pl.name}{' '}
-                        <span className="text-xs font-mono" style={{ color: 'var(--st-text-muted)' }}>
-                          v{pl.currentVersion} · by {pl.authorName}
-                        </span>
-                      </div>
-                      <div className="text-xs" style={{ color: 'var(--st-text-muted)' }}>
-                        {pl.tagline}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <PluginLogo name={pl.name} iconUrl={pl.iconUrl} size="sm" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold" style={{ color: 'var(--st-text)' }}>
+                          {pl.name}{' '}
+                          <span className="text-xs font-mono" style={{ color: 'var(--st-text-muted)' }}>
+                            v{pl.currentVersion} · by {pl.authorName}
+                          </span>
+                        </div>
+                        <div className="text-xs truncate" style={{ color: 'var(--st-text-muted)' }}>
+                          {pl.tagline}
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1168,46 +1190,49 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
               return (
                 <div key={pl.id} className="st-card p-5 space-y-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => onNavigate(`/plugin/${pl.slug}`)}
-                          className="text-base font-bold hover:underline cursor-pointer"
-                          style={{ color: 'var(--st-text)' }}
-                        >
-                          {pl.name}
-                        </button>
-                        <span className="font-mono" style={{ color: 'var(--st-success)' }}>
-                          v{pl.currentVersion}
-                        </span>
-                        <span
-                          className={`font-semibold ${
-                            pl.status === 'published'
-                              ? 'text-emerald-400'
+                    <div className="flex items-start gap-3 min-w-0">
+                      <PluginLogo name={pl.name} iconUrl={pl.iconUrl} size="md" />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => onNavigate(`/plugin/${pl.slug}`)}
+                            className="text-base font-bold hover:underline cursor-pointer"
+                            style={{ color: 'var(--st-text)' }}
+                          >
+                            {pl.name}
+                          </button>
+                          <span className="font-mono" style={{ color: 'var(--st-success)' }}>
+                            v{pl.currentVersion}
+                          </span>
+                          <span
+                            className={`font-semibold ${
+                              pl.status === 'published'
+                                ? 'text-emerald-400'
+                                : pl.status === 'pending'
+                                ? 'text-amber-400'
+                                : ''
+                            }`}
+                            style={
+                              pl.status === 'hidden' ? { color: 'var(--st-text-muted)' } : undefined
+                            }
+                          >
+                            ·{' '}
+                            {pl.status === 'published'
+                              ? 'Published'
                               : pl.status === 'pending'
-                              ? 'text-amber-400'
-                              : ''
-                          }`}
-                          style={
-                            pl.status === 'hidden' ? { color: 'var(--st-text-muted)' } : undefined
-                          }
-                        >
-                          ·{' '}
-                          {pl.status === 'published'
-                            ? 'Published'
-                            : pl.status === 'pending'
-                            ? 'Pending Approval'
-                            : 'Hidden Draft'}
-                        </span>
-                        {pl.featured && (
-                          <span className="font-semibold text-amber-400">· Featured</span>
-                        )}
+                              ? 'Pending Approval'
+                              : 'Hidden Draft'}
+                          </span>
+                          {pl.featured && (
+                            <span className="font-semibold text-amber-400">· Featured</span>
+                          )}
+                        </div>
+                        <p className="text-xs mt-1 tabular-nums" style={{ color: 'var(--st-text-muted)' }}>
+                          by {pl.authorName} · {pl.fileName || 'No archive'} ({formatBytes(pl.fileSize)}) ·{' '}
+                          {pl.downloads.toLocaleString()} downloads · {pl.reviewsCount} reviews
+                        </p>
                       </div>
-                      <p className="text-xs mt-1 tabular-nums" style={{ color: 'var(--st-text-muted)' }}>
-                        by {pl.authorName} · {pl.fileName || 'No archive'} ({formatBytes(pl.fileSize)}) ·{' '}
-                        {pl.downloads.toLocaleString()} downloads · {pl.reviewsCount} reviews
-                      </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -1240,6 +1265,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                             setEditPrice(pl.priceLabel);
                             setEditMcVersions(pl.mcVersions.join(', '));
                             setEditSupportUrl(pl.supportUrl);
+                            setEditIconUrl(pl.iconUrl || '');
                           }
                         }}
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 st-btn-secondary text-xs font-semibold cursor-pointer"
@@ -1298,6 +1324,45 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                       className="pt-4 border-t space-y-3"
                       style={{ borderColor: 'var(--st-border)' }}
                     >
+                      <div className="flex flex-wrap items-center gap-3 pb-1">
+                        <PluginLogo name={editName || pl.name} iconUrl={editIconUrl} size="lg" />
+                        <div className="flex-1 min-w-[200px] space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label
+                              htmlFor={`edit-icon-file-${pl.id}`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 st-btn-secondary text-[11px] font-semibold cursor-pointer"
+                            >
+                              <ImagePlus className="w-3 h-3" />
+                              <span>{editIconUrl ? 'Change Icon Logo' : 'Upload Icon Logo'}</span>
+                            </label>
+                            <input
+                              id={`edit-icon-file-${pl.id}`}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/gif"
+                              onChange={(e) => void handleEditIconUpload(e.target.files?.[0] || null)}
+                              className="hidden"
+                            />
+                            {editIconUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setEditIconUrl('')}
+                                className="px-2 py-1 st-btn-secondary text-[11px] text-rose-500 cursor-pointer"
+                              >
+                                Clear Icon
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="url"
+                            value={editIconUrl.startsWith('data:') ? '' : editIconUrl}
+                            onChange={(e) => setEditIconUrl(e.target.value)}
+                            placeholder="Or paste HTTPS icon URL (https://...)"
+                            className="w-full px-2.5 py-1.5 st-surface-inset text-[11px] font-mono"
+                            style={{ color: 'var(--st-text)' }}
+                          />
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <input
                           type="text"
@@ -1450,259 +1515,18 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 4: OWNER DIRECT PLUGIN UPLOAD */}
+      {/* TAB 4: BUILTBYBIT-STYLE OWNER PLUGIN UPLOAD CONTROLLER */}
       {activeTab === 'upload' && (
-        <form onSubmit={(e) => void handleUploadNewPlugin(e)} className="st-card p-6 space-y-5">
-          <div>
-            <h2 className="text-base font-bold" style={{ color: 'var(--st-text)' }}>
-              Upload New Plugin Release
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--st-text-muted)' }}>
-              Publish a BuiltByBit-style resource listing directly with a downloadable .jar or .zip archive.
-            </p>
-          </div>
-
-          {uploadError && (
-            <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-500">
-              {uploadError}
-            </div>
-          )}
-          {uploadSuccess && (
-            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-500 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>{uploadSuccess}</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="sm:col-span-2">
-              <label htmlFor="own-pl-name" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Plugin Name
-              </label>
-              <input
-                id="own-pl-name"
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. SurgeGuard AC"
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="own-pl-ver" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Version
-              </label>
-              <input
-                id="own-pl-ver"
-                type="text"
-                required
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-                placeholder="1.0.0"
-                className="w-full px-3 py-2 st-surface-inset font-mono text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="own-pl-price" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Price / Tag
-              </label>
-              <input
-                id="own-pl-price"
-                type="text"
-                value={priceLabel}
-                onChange={(e) => setPriceLabel(e.target.value)}
-                placeholder="Free"
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="own-pl-cat" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Category
-              </label>
-              <select
-                id="own-pl-cat"
-                value={category}
-                onChange={(e) => setCategory(e.target.value as PluginCategory)}
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              >
-                {PLUGIN_CATEGORIES.filter((c) => c !== 'All Categories').map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="own-pl-mc" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Minecraft Versions
-              </label>
-              <input
-                id="own-pl-mc"
-                type="text"
-                value={mcVersions}
-                onChange={(e) => setMcVersions(e.target.value)}
-                placeholder="1.20.4, 1.21.4"
-                className="w-full px-3 py-2 st-surface-inset font-mono text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label htmlFor="own-pl-url" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Support / Discord / Docs URL (optional)
-              </label>
-              <input
-                id="own-pl-url"
-                type="url"
-                value={supportUrl}
-                onChange={(e) => setSupportUrl(e.target.value)}
-                placeholder="https://discord.gg/..."
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor="own-pl-tagline" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-              Tagline (short one-line summary)
-            </label>
-            <input
-              id="own-pl-tagline"
-              type="text"
-              required
-              value={tagline}
-              onChange={(e) => setTagline(e.target.value)}
-              placeholder="High-TPS anti-cheat and packet validation for Paper & Folia servers."
-              className="w-full px-3 py-2 st-surface-inset text-sm"
-              style={{ color: 'var(--st-text)' }}
-            />
-          </div>
-
-          <div>
-            <span className="block text-xs font-medium mb-2" style={{ color: 'var(--st-text-secondary)' }}>
-              Supported Server Software
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {PLUGIN_PLATFORMS.map((plat) => {
-                const active = platforms.includes(plat);
-                return (
-                  <button
-                    key={plat}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => togglePlatform(plat)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-                    style={{
-                      backgroundColor: active ? 'var(--st-accent-soft)' : 'var(--st-surface-inset)',
-                      border: active
-                        ? '1px solid var(--st-border-strong)'
-                        : '1px solid var(--st-border)',
-                      color: active ? 'var(--st-accent-text)' : 'var(--st-text-muted)',
-                    }}
-                  >
-                    {plat}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor="own-pl-desc" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-              Full BuiltByBit Overview (Features, Commands, Permissions)
-            </label>
-            <textarea
-              id="own-pl-desc"
-              rows={5}
-              required
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe features, installation instructions, commands, permissions, and configuration options..."
-              className="w-full p-3 st-surface-inset text-sm"
-              style={{ color: 'var(--st-text)' }}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="own-pl-rel-title" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Release Title (optional)
-              </label>
-              <input
-                id="own-pl-rel-title"
-                type="text"
-                value={releaseTitle}
-                onChange={(e) => setReleaseTitle(e.target.value)}
-                placeholder={`Initial Release v${version || '1.0.0'}`}
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-            <div>
-              <label htmlFor="own-pl-changelog" className="block text-xs font-medium mb-1" style={{ color: 'var(--st-text-secondary)' }}>
-                Release Changelog
-              </label>
-              <input
-                id="own-pl-changelog"
-                type="text"
-                value={changelog}
-                onChange={(e) => setChangelog(e.target.value)}
-                className="w-full px-3 py-2 st-surface-inset text-sm"
-                style={{ color: 'var(--st-text)' }}
-              />
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl st-surface-inset space-y-2">
-            <label htmlFor="own-pl-file" className="block text-xs font-semibold" style={{ color: 'var(--st-text)' }}>
-              Upload Plugin Archive (.jar or .zip, max 25 MB)
-            </label>
-            <input
-              id="own-pl-file"
-              type="file"
-              accept=".jar,.zip"
-              onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-              className="block w-full text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:cursor-pointer"
-              style={{ color: 'var(--st-text-secondary)' }}
-            />
-            {selectedFile && (
-              <div className="text-xs font-mono" style={{ color: 'var(--st-success)' }}>
-                Ready: {selectedFile.name} ({formatBytes(selectedFile.size)})
-              </div>
-            )}
-          </div>
-
-          <label className="inline-flex items-center gap-2 text-xs font-medium cursor-pointer" style={{ color: 'var(--st-text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={featured}
-              onChange={(e) => setFeatured(e.target.checked)}
-              className="w-4 h-4 accent-[var(--st-accent)]"
-            />
-            <span>Feature this plugin at the top of the Plugins Marketplace</span>
-          </label>
-
-          <div>
-            <button
-              type="submit"
-              disabled={uploading}
-              className="inline-flex items-center gap-2 px-5 py-2.5 st-btn-primary text-xs font-semibold cursor-pointer disabled:opacity-60"
-            >
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              <span>{uploading ? 'Uploading & Publishing…' : 'Upload & Publish Plugin'}</span>
-            </button>
-          </div>
-        </form>
+        <BuiltByBitResourceForm
+          mode="owner"
+          authorDisplayName={user?.username || 'drminemc'}
+          values={uploadValues}
+          onChange={patchUploadValues}
+          onSubmit={(e) => void handleUploadNewPlugin(e)}
+          submitting={uploading}
+          error={uploadError}
+          success={uploadSuccess}
+        />
       )}
     </div>
   );

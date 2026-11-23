@@ -222,6 +222,12 @@
           "minLength": 0,
           "maxLength": 256
         },
+        "iconUrl": {
+          "type": "string",
+          "description": "Optional plugin icon/logo HTTPS URL or compressed raster data URI.",
+          "minLength": 0,
+          "maxLength": 65536
+        },
         "versionsJson": {
           "type": "string",
           "description": "Serialized release version history.",

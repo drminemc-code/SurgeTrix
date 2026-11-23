@@ -1361,6 +1361,7 @@ async function startServer() {
       fileSize: 0,
       sha256: '',
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       downloads: 0,
       ratingAverage: 0,
       reviewsCount: 0,
@@ -1437,6 +1438,7 @@ async function startServer() {
       fileSize: 0,
       sha256: '',
       supportUrl: validated.data.supportUrl,
+      iconUrl: validated.data.iconUrl,
       downloads: 0,
       ratingAverage: 0,
       reviewsCount: 0,
@@ -1583,6 +1585,7 @@ async function startServer() {
       mcVersions: req.body?.mcVersions ?? plugin.mcVersions,
       priceLabel: req.body?.priceLabel ?? plugin.priceLabel,
       supportUrl: req.body?.supportUrl ?? plugin.supportUrl,
+      iconUrl: req.body?.iconUrl !== undefined ? req.body.iconUrl : plugin.iconUrl,
     });
     if (!merged.ok) {
       return res.status(400).json({ ok: false, error: merged.error });
@@ -1596,6 +1599,7 @@ async function startServer() {
     plugin.mcVersions = merged.data.mcVersions;
     plugin.priceLabel = merged.data.priceLabel;
     plugin.supportUrl = merged.data.supportUrl;
+    plugin.iconUrl = merged.data.iconUrl;
     if (typeof req.body?.featured === 'boolean') {
       plugin.featured = req.body.featured;
     }
